@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voiceclone — voice cloning &amp; sentiment TTS</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">🎙️ voiceclone</div>
+  <div class="sub">clone voices from plain audio · synthesize with sentiment · English &amp; Dutch</div>
+</header>
+
+<main>
+  <!-- ============ left: voices ============ -->
+  <section class="panel" id="voices-panel">
+    <h2>Voice profiles</h2>
+    <div id="voice-list" class="voice-list"></div>
+
+    <h3>Register samples for <span id="active-voice-label" class="accent">—</span></h3>
+    <div id="dropzone" class="dropzone">
+      <p><b>Drop .wav / .mp3 files here</b> or <label class="btn small">browse…<input type="file" id="file-input" multiple accept=".wav,.mp3,.flac,.m4a, audio/*" hidden></label></p>
+      <p class="hint">Clean speech of one speaker works best. 10–60 s total is plenty for zero-shot; minutes help fine-tuning.</p>
+    </div>
+
+    <div class="row spread">
+      <label>Language
+        <select id="up-lang"><option value="auto">auto</option><option value="en">English</option><option value="nl">Dutch</option></select>
+      </label>
+      <label>Emotion tag
+        <select id="up-emotion"></select>
+      </label>
+    </div>
+
+    <h3>Samples</h3>
+    <table class="samples" id="samples-table">
+      <thead><tr><th></th><th>emotion</th><th>lang</th><th>dur</th><th>transcript</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ============ right: synthesize ============ -->
+  <section class="panel" id="tts-panel">
+    <h2>Synthesize</h2>
+
+    <label class="wide">Text
+      <textarea id="text" rows="5" placeholder="Type or paste the text to speak… (English or Dutch)">Hello! This is a cloned voice speaking with sentiment control.</textarea>
+    </label>
+
+    <div class="chips" id="emotion-chips"></div>
+
+    <div class="row">
+      <label>Style (free text, optional)
+        <input type="text" id="style" placeholder="e.g. whisper this, very calm and gentle">
+      </label>
+      <label>Language
+        <select id="syn-lang"><option value="auto">auto</option><option value="en">English</option><option value="nl">Dutch</option></select>
+      </label>
+    </div>
+
+    <details class="advanced" id="adv-settings">
+      <summary>⚙ Advanced generation settings <span class="hint">(optional — blank = model default)</span></summary>
+      <p class="hint"><b>Skipped words</b> → raise length penalty, lower temperature, slow the speed. &nbsp;·&nbsp; <b>Stuttering / repeats</b> → raise repetition penalty.</p>
+      <div class="row">
+        <label>Temperature <input type="number" id="temperature" step="any" min="0" max="2" placeholder="0.5"></label>
+        <label>Length penalty <input type="number" id="length-penalty" step="any" min="0" placeholder="1.0"></label>
+      </div>
+      <div class="row">
+        <label>Repetition penalty <input type="number" id="repetition-penalty" step="any" min="0" placeholder="5.0"></label>
+        <label>Speed <input type="number" id="speed" step="any" min="0.1" max="2" placeholder="1.0"></label>
+      </div>
+      <div class="row">
+        <label>Top-k <input type="number" id="top-k" step="1" min="1" placeholder="50"></label>
+        <label>Top-p <input type="number" id="top-p" step="any" min="0" max="1" placeholder="0.85"></label>
+      </div>
+    </details>
+
+    <div class="row spread">
+      <label>Engine mode
+        <select id="mode"><option value="auto">auto</option><option value="zero-shot">zero-shot (base model)</option><option value="finetuned">fine-tuned voice model</option></select>
+      </label>
+      <button class="btn primary" id="gen-btn">▶ Generate speech</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <audio id="player" controls style="display:none; width:100%"></audio>
+    <div id="meta" class="meta"></div>
+
+    <hr>
+    <h3>A/B compare — zero-shot vs fine-tuned</h3>
+    <p class="hint">Generate the same text both ways and listen side by side. Side B needs a registered fine-tuned checkpoint.</p>
+    <div class="row spread">
+      <span class="hint">Uses the text &amp; settings above</span>
+      <button class="btn" id="ab-btn">⚖ Run A/B compare</button>
+    </div>
+    <div id="ab-status" class="status"></div>
+    <div id="ab-results"></div>
+
+    <hr>
+    <h3>Fine-tune this voice (optional, higher fidelity)</h3>
+    <p class="hint">Trains a dedicated XTTS v2 model on the samples above. Slow on CPU (hours); fast on GPU.</p>
+
+    <div id="data-warning" class="data-warning" hidden></div>
+
+    <div class="row">
+      <label>Epochs <input type="number" id="epochs" value="1" min="1" max="100"></label>
+      <label>Lr (lower = safer) <input type="number" id="lr" value="1e-6" step="any" min="0" placeholder="1e-6"></label>
+    </div>
+    <div class="row">
+      <label>Grad accum <input type="number" id="grad-accum" value="4" min="1"></label>
+      <label>Precision
+        <select id="precision"><option value="auto">auto (bf16 on GPU)</option><option value="bf16">bf16</option><option value="fp32">fp32</option></select>
+      </label>
+    </div>
+    <label class="checkline"><input type="checkbox" id="force"> Ignore low-RAM guard (OOM risk)</label>
+
+    <div class="row spread">
+      <span class="hint">Tip: with little audio, 1 epoch is usually the ceiling — more often makes words worse.</span>
+      <button class="btn primary" id="train-btn">🏋 Start fine-tuning</button>
+    </div>
+    <div id="train-status" class="status"></div>
+
+    <hr>
+    <h3>Checkpoint manager</h3>
+    <p class="hint">Choose which trained model this voice uses. "Zero-shot" ignores all fine-tunes.</p>
+    <label>Active checkpoint
+      <select id="ckpt-select"><option value="">— none (zero-shot) —</option></select>
+    </label>
+    <div class="row spread">
+      <button class="btn small" id="ckpt-apply">Apply selected</button>
+      <button class="btn small" id="ckpt-clear">Clear → zero-shot</button>
+    </div>
+    <div id="ckpt-status" class="status"></div>
+  </section>
+
+  <!-- ============ full width: storage & cleanup ============ -->
+  <section class="panel wide-panel" id="storage-panel">
+    <h2>Storage &amp; cleanup</h2>
+    <p class="hint">Fine-tune checkpoints are ~5.6 GB each and every run keeps duplicates. Review what's taking space, then delete safely — the base model and your source samples are never touched.</p>
+
+    <div id="storage-summary" class="meta"></div>
+    <table class="samples" id="storage-table">
+      <thead><tr><th>Voice</th><th>Run</th><th>Size</th><th>Best step</th><th>Status</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="row spread" style="margin-top:.8rem">
+      <span class="hint">Quick actions for <b id="cleanup-voice-label" class="accent">—</b>:</span>
+      <span class="row" style="gap:.5rem; margin:0">
+        <button class="btn small" id="clean-keep-reg">🧹 Keep only registered</button>
+        <button class="btn small" id="clean-reset">♻ Reset training</button>
+      </span>
+    </div>
+
+    <div id="cleanup-status" class="status"></div>
+  </section>
+</main>
+
+<footer>
+  Runs fully locally · XTTS v2 weights are non-commercial licensed (CPML) · data lives in <code>data/</code>
+</footer>
+<script src="/app.js"></script>
+</body>
+</html>

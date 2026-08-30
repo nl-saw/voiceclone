@@ -1,0 +1,57 @@
+[project]
+name = "voiceclone"
+version = "0.1.0"
+description = "Voice cloning toolkit: register voices from plain audio samples, fine-tune per-voice models, and synthesize speech with sentiment control (English + Dutch)."
+readme = "README.md"
+# coqui TTS (XTTS v2) requires python >= 3.9 and < 3.12; we pin to 3.11
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    # XTTS v2 engine + official fine-tuning trainer (last release with XTTS v2 is git main)
+    "TTS @ git+https://github.com/coqui-ai/TTS.git@eef419b37393b11cc741662d041d8d793e011f2d",
+    # Automatic transcription of voice samples (en/nl), CPU-friendly
+    "faster-whisper>=1.0.0",
+    # Audio decoding/resampling (mp3, wav, flac, m4a) without system ffmpeg
+    "av>=12.0.0",
+    "soundfile>=0.12.1",
+    "numpy>=1.26",
+    # XTTS v2 needs the top-level `LogitsWarper` export — removed in transformers 4.49.0 (verified by bisect)
+    "transformers>=4.36,<4.49",
+    # Needed by the XTTS fine-tuning pipeline (dataset loading, wav I/O)
+    "torchaudio>=2.2",
+    # coqui TTS pins pandas<2.0, so stay compatible
+    "pandas>=1.4,<2.0",
+    # Web UI
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    # Speaker-consistency checks on registered samples (optional at runtime)
+    "speechbrain>=1.0.2",
+    # CLI niceties
+    "rich>=13.7",
+]
+
+[project.scripts]
+voiceclone = "voiceclone.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["voiceclone"]
+
+# NOTE: despite this index, uv.lock resolves torch from PyPI as the CUDA build
+# (2.13.x+cu130) on Linux x86_64 — a plain `uv sync` on a GPU machine works.
+# torchaudio comes from the CPU index; that's fine because audio I/O is patched
+# to PyAV (see voiceclone/compat.py). If you re-resolve, prefer CUDA wheels.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
