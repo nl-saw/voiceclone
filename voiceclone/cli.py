@@ -236,6 +236,7 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             top_p=args.top_p,
             speed=args.speed,
+            max_chars=args.max_chars,
         )
     except Exception as e:  # noqa: BLE001
         console.print(f"[red]Synthesis failed:[/red] {e}")
@@ -385,6 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top-k", type=int, default=None, help="top-k sampling (default 50; lower = more focused)")
     sp.add_argument("--top-p", type=float, default=None, help="nucleus top-p (default 0.85; lower = more focused)")
     sp.add_argument("--speed", type=float, default=None, help="speech speed (default 1.0; ~0.9 = clearer/slower, >1 = faster but riskier drops)")
+    sp.add_argument("--max-chars", type=int, default=None, help="long-text chunk cap in characters (default 120; lower = safer on fine-tuned voices, 0 = single generation)")
     sp.set_defaults(func=cmd_synthesize)
 
     sp = sub.add_parser("train", help="fine-tune an XTTS v2 model on a voice's samples")

@@ -184,7 +184,7 @@ function genParams() {
     const n = Number(raw);
     return Number.isFinite(n) ? n : null;
   };
-  const map = { temperature: "temperature", length_penalty: "length-penalty", repetition_penalty: "repetition-penalty", top_k: "top-k", top_p: "top-p", speed: "speed" };
+  const map = { temperature: "temperature", length_penalty: "length-penalty", repetition_penalty: "repetition-penalty", top_k: "top-k", top_p: "top-p", speed: "speed", max_chars: "max-chars" };
   for (const [key, id] of Object.entries(map)) {
     const v = num(id);
     if (v != null) p[key] = v;

@@ -12,12 +12,59 @@ Supported languages include English ("en") and Dutch ("nl").
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import numpy as np
 
 from ..config import get_settings
 from .base import Engine, SynthesisResult
+
+# XTTS v2 is an autoregressive GPT trained on utterances of ~12 s or less; a
+# single generation longer than that drifts out of distribution (invented
+# words mid-utterance), especially for fine-tuned checkpoints trained on
+# sentence-level clips. Long text is therefore split into sentence-boundary
+# chunks below this cap and each chunk is generated independently, joined by
+# a short silence. max_chars=0 disables chunking entirely.
+DEFAULT_MAX_CHARS = 120
+CHUNK_GAP_SECONDS = 0.2
+
+
+def _hard_split(sentence: str, max_chars: int) -> list[str]:
+    """Split one sentence into word-boundary pieces of at most ``max_chars``."""
+    if len(sentence) <= max_chars:
+        return [sentence]
+    out: list[str] = []
+    cur = ""
+    for word in sentence.split(" "):
+        cand = f"{cur} {word}".strip()
+        if len(cand) <= max_chars:
+            cur = cand
+        else:
+            if cur:
+                out.append(cur)
+            cur = word  # a single word longer than the cap becomes its own chunk
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _split_text(text: str, max_chars: int) -> list[str]:
+    """Split ``text`` into chunks of at most ``max_chars`` on sentence boundaries."""
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", text) if s.strip()]
+    chunks: list[str] = []
+    cur = ""
+    for sentence in sentences:
+        for piece in _hard_split(sentence, max_chars):
+            cand = f"{cur} {piece}".strip()
+            if not cur or len(cand) <= max_chars:
+                cur = cand
+            else:
+                chunks.append(cur)
+                cur = piece
+    if cur:
+        chunks.append(cur)
+    return chunks
 
 # Original XTTS v2 weights, fetched directly from HuggingFace.
 _BASE_FILES = {
@@ -154,6 +201,7 @@ class XttsEngine(Engine):
         top_k: int | None = None,
         top_p: float | None = None,
         speed: float | None = None,
+        max_chars: int | None = None,  # long-text chunk cap; None = DEFAULT_MAX_CHARS, 0 = off
     ) -> SynthesisResult:
         if not is_license_accepted():
             raise LicenseNotAccepted()
@@ -183,22 +231,45 @@ class XttsEngine(Engine):
                 max_ref_length=config.max_ref_len,
                 sound_norm_refs=config.sound_norm_refs,
             )
-            out = model.inference(
-                text=text,
-                language=language,
-                gpt_cond_latent=gpt_cond_latent,
-                speaker_embedding=speaker_embedding,
-                temperature=temperature,
-                length_penalty=length_penalty,
-                repetition_penalty=repetition_penalty,
-                top_k=top_k,
-                top_p=top_p,
-                speed=speed,
-                enable_text_splitting=True,  # handle long texts safely
-            )
 
-        # inference() returns {"wav": np.ndarray (24 kHz), ...}
-        wav = np.asarray(out["wav"], dtype=np.float32).reshape(-1)
+        # --- long-text chunking ---------------------------------------------
+        # Generate each chunk as a fresh sequence so no single generation
+        # exceeds the utterance lengths the model was trained on. With our
+        # chunking active we turn off the library's own splitter (it caps at
+        # ~250 chars ≈ 15-20 s of speech, still too long, and needs spacy);
+        # with chunking disabled (max_chars=0) we keep it as a safety net.
+        cap = DEFAULT_MAX_CHARS if max_chars is None else int(max_chars)
+        chunks = _split_text(text, cap) if cap > 0 and len(text) > cap else [text]
+
+        wavs: list[np.ndarray] = []
+        for chunk in chunks:
+            with torch.no_grad():
+                out = model.inference(
+                    text=chunk,
+                    language=language,
+                    gpt_cond_latent=gpt_cond_latent,
+                    speaker_embedding=speaker_embedding,
+                    temperature=temperature,
+                    length_penalty=length_penalty,
+                    repetition_penalty=repetition_penalty,
+                    top_k=top_k,
+                    top_p=top_p,
+                    speed=speed,
+                    enable_text_splitting=cap <= 0,
+                )
+            # inference() returns {"wav": np.ndarray (24 kHz), ...}
+            wavs.append(np.asarray(out["wav"], dtype=np.float32).reshape(-1))
+
+        if len(wavs) > 1:
+            gap = np.zeros(int(CHUNK_GAP_SECONDS * 24000), dtype=np.float32)
+            parts: list[np.ndarray] = []
+            for i, w in enumerate(wavs):
+                if i:
+                    parts.append(gap)
+                parts.append(w)
+            wav = np.concatenate(parts)
+        else:
+            wav = wavs[0]
 
         return SynthesisResult(
             wav=wav,
