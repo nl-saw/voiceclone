@@ -392,7 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--epochs", type=int, default=5)
     sp.add_argument("--batch-size", type=int, default=1)
     sp.add_argument("--grad-accum", type=int, default=4, help="gradient accumulation steps (effective batch = bs * accum)")
-    sp.add_argument("--lr", type=float, default=None, help="learning rate (default 1e-06; lower = closer to base voice quality, higher = more voice similarity)")
+    sp.add_argument("--lr", type=float, default=None, help="learning rate (default 4e-06; lower = closer to base voice quality, higher = more voice similarity)")
     sp.add_argument("--dry-run", action="store_true", help="only prepare the training dataset")
     sp.add_argument("--force", action="store_true", help="start even if free RAM looks too low (OOM risk)")
     sp.add_argument(

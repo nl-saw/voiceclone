@@ -73,7 +73,7 @@ class TrainRequest(BaseModel):
     batch_size: int = 1
     grad_accum_steps: int = 4
     precision: str = "auto"  # auto | bf16 | fp32
-    lr: float | None = None  # default 1e-06; lower = stays closer to base voice
+    lr: float | None = None  # default 4e-06; lower = stays closer to base voice
     force: bool = False      # start even if free RAM looks too low
     dry_run: bool = False
 

@@ -29,7 +29,7 @@ No ML setup, no dataset wrangling, no config files. The whole flow is:
 2. **Train** — one command builds the dataset and fine-tunes a dedicated
    XTTS v2 model on those samples:
    ```bash
-   uv run voiceclone train alice --epochs 1        # --dry-run to just prep data
+   uv run voiceclone train alice --epochs 1 --lr 4e-6   # --dry-run to just prep data
    ```
 3. **Use it** — switch synthesis to the custom model:
    ```bash
@@ -75,7 +75,7 @@ uv run voiceclone synthesize "Goodbye." --voice alice --emotion sad
 uv run voiceclone synthesize "Shh…" --voice alice --style "whisper, very quiet"
 
 # 5) optional: fine-tune a dedicated model (slow on CPU!)
-uv run voiceclone train alice --epochs 1            # add --dry-run to only prep data
+uv run voiceclone train alice --epochs 1 --lr 4e-6     # add --dry-run to only prep data
 uv run voiceclone synthesize "Hi!" --voice alice --mode finetuned
 
 # web UI

@@ -179,7 +179,7 @@ def run_finetune(
     dry_run: bool = False,
     force: bool = False,
     precision: str = "auto",  # auto | bf16 | fp32
-    lr: float | None = None,  # default 1e-06 (lower = stays closer to the base voice)
+    lr: float | None = None,  # default 4e-06 (lower = stays closer to the base voice)
     log_path: Path | None = None,
 ) -> TrainReport:
     """Fine-tune XTTS v2 on a voice's samples. Blocks until done (or error)."""
@@ -336,7 +336,7 @@ def run_finetune(
             optimizer="AdamW",
             optimizer_wd_only_on_weights=True,
             optimizer_params={"betas": [0.9, 0.96], "eps": 1e-8, "weight_decay": 1e-2},
-            lr=lr if lr is not None else 1e-06,
+            lr=lr if lr is not None else 4e-06,
             lr_scheduler="MultiStepLR",
             lr_scheduler_params={
                 "milestones": [50000 * 18, 150000 * 18, 300000 * 18],
