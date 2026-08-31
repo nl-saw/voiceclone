@@ -91,27 +91,81 @@ def transcribe_wav(
     )
 
 
-def split_sentences(text: str) -> list[str]:
+# XTTS per-language soft cap is 250 chars for English (check_input_length warns
+# above it), and the GPT trainer drops samples past ~200 tokens. Keep every
+# training chunk under both with margin: ~240 chars ≈ ~145 tokens.
+MAX_SENTENCE_CHARS = 240
+
+
+def _break_long_chunk(chunk: str, max_chars: int) -> list[str]:
+    """Break a single over-long chunk into pieces of at most ``max_chars``.
+
+    Prefers natural clause boundaries (commas / semicolons / dashes), then falls
+    back to a hard word window so we never emit a chunk that XTTS would warn on
+    or drop.
+    """
+    if len(chunk) <= max_chars:
+        return [chunk]
+
+    # Try clause boundaries first; only use them if they actually shorten it.
+    parts = [p.strip() for p in re.split(r"\s*(?:,|;|—|--)\s*", chunk) if p.strip()]
+    if len(parts) > 1 and max(len(p) for p in parts) < len(chunk):
+        out: list[str] = []
+        for p in parts:
+            out.extend(_break_long_chunk(p, max_chars))
+        return [p for p in out if p]
+
+    # Fallback: hard word window.
+    words = chunk.split()
+    out = []
+    buf = ""
+    for w in words:
+        cand = f"{buf} {w}".strip() if buf else w
+        if len(cand) > max_chars and buf:
+            out.append(buf)
+            buf = w
+        else:
+            buf = cand
+    if buf:
+        out.append(buf)
+    return [p for p in out if p]
+
+
+def split_sentences(text: str, max_chars: int = MAX_SENTENCE_CHARS) -> list[str]:
     """Split transcript text into sentence-like chunks for training pairs.
 
-    Splits on terminal punctuation and newlines; merges fragments that are too
-    short so the training set contains usable sentences.
+    Splits on terminal punctuation and newlines; long run-on chunks (no terminal
+    punctuation — common in Whisper output of spoken interviews) are further
+    broken on clause boundaries / word windows so no chunk exceeds ``max_chars``.
+    Fragments shorter than 3 words are merged with a neighbour when that keeps
+    the result under the cap, so the training set stays meaningful.
     """
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return []
-    raw = re.split(r"(?<=[.!?…])\s+|\n+", text)
+
+    # 1) Sentence-level split, then break any over-long sentence further.
+    pieces: list[str] = []
+    for raw in re.split(r"(?<=[.!?…])\s+|\n+", text):
+        raw = raw.strip()
+        if not raw:
+            continue
+        pieces.extend(_break_long_chunk(raw, max_chars))
+
+    # 2) Merge tiny trailing fragments into the preceding chunk while under cap.
     chunks: list[str] = []
     buf = ""
-    for piece in raw:
-        piece = piece.strip()
-        if not piece:
-            continue
-        buf = f"{buf} {piece}".strip()
-        if len(piece.split()) >= 4 or re.search(r"[.!?…]$", piece):
+    for p in pieces:
+        if len(p.split()) < 3 and not re.search(r"[.!?…]$", p) and buf:
+            cand = f"{buf} {p}".strip()
+            if len(cand) <= max_chars:
+                buf = cand
+                continue
+        if buf:
             chunks.append(buf)
-            buf = ""
+        buf = p
     if buf:
         chunks.append(buf)
-    # Drop tiny fragments (XTTS wants meaningful prompt texts).
+
+    # 3) Drop any remaining slivers (XTTS wants meaningful prompt texts).
     return [c for c in chunks if len(c.split()) >= 3]
