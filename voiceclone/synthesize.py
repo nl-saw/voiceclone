@@ -37,6 +37,7 @@ def synthesize(
     top_k: int | None = None,
     top_p: float | None = None,
     speed: float | None = None,
+    max_chars: int | None = None,  # long-text chunk cap (None = engine default 120, 0 = off)
 ) -> SynthesisOutcome:
     """Synthesize ``text`` with a registered voice.
 
@@ -108,6 +109,7 @@ def synthesize(
         top_k=top_k,
         top_p=top_p,
         speed=speed,
+        max_chars=max_chars,
     )
 
     # --- save ----------------------------------------------------------------
