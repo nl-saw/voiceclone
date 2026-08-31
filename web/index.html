@@ -61,7 +61,7 @@
 
     <details class="advanced" id="adv-settings">
       <summary>⚙ Advanced generation settings <span class="hint">(optional — blank = model default)</span></summary>
-      <p class="hint"><b>Skipped words</b> → raise length penalty, lower temperature, slow the speed. &nbsp;·&nbsp; <b>Stuttering / repeats</b> → raise repetition penalty. &nbsp;·&nbsp; <b>Invented words on long text</b> → lower max chars per chunk.</p>
+      <p class="hint"><b>Skipped words</b> → raise length penalty, lower temperature, slow the speed. &nbsp;·&nbsp; <b>Stuttering / repeats</b> → raise repetition penalty.</p>
       <div class="row">
         <label>Temperature <input type="number" id="temperature" step="any" min="0" max="2" placeholder="0.5"></label>
         <label>Length penalty <input type="number" id="length-penalty" step="any" min="0" placeholder="1.0"></label>
@@ -73,10 +73,6 @@
       <div class="row">
         <label>Top-k <input type="number" id="top-k" step="1" min="1" placeholder="50"></label>
         <label>Top-p <input type="number" id="top-p" step="any" min="0" max="1" placeholder="0.85"></label>
-      </div>
-      <div class="row">
-        <label>Max chars per chunk <input type="number" id="max-chars" step="1" min="0" placeholder="120"></label>
-        <span class="hint">long text is generated in sentence chunks (blank = 120; 0 = single generation)</span>
       </div>
     </details>
 

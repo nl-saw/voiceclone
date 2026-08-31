@@ -65,7 +65,6 @@ class SynthesizeRequest(BaseModel):
     top_k: int | None = None
     top_p: float | None = None
     speed: float | None = None
-    max_chars: int | None = None  # long-text chunk cap (None = engine default 120, 0 = off)
 
 
 class TrainRequest(BaseModel):
@@ -228,7 +227,6 @@ def create_app() -> FastAPI:
                 top_k=req.top_k,
                 top_p=req.top_p,
                 speed=req.speed,
-                max_chars=req.max_chars,
             )
         except ValueError as e:
             raise HTTPException(400, str(e)) from e

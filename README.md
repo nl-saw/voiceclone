@@ -116,11 +116,6 @@ speaking in each emotion you want.
   `--precision fp32` (or force `--precision bf16`).
 - Quality guidance: ≥ 1–5 min of clean, single-speaker audio; avoid music,
   noise and long silences in the source clips.
-- **Long text:** synthesis splits long input into sentence chunks (default
-  ≤ 120 chars) and generates each chunk separately with a short pause between —
-  fine-tuned models are trained on short utterances and start inventing words
-  mid-utterance when asked to generate one very long sequence. Tune the cap
-  with `--max-chars` (lower = safer, 0 = single generation).
 
 ## Project layout
 
