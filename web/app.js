@@ -75,7 +75,7 @@ async function selectVoice(name) {
 }
 
 async function loadSamples(name) {
-  const d = await api(`/api/voices/${encodeURIComponent(name)}`).json();
+  const d = await (await api(`/api/voices/${encodeURIComponent(name)}`)).json();
   activeVoiceSeconds = d.total_seconds || 0;
   updateDataWarning();
   const tbody = $("#samples-table tbody");
@@ -278,7 +278,7 @@ function pollTrain(jobId) {
   if (trainPoll) clearInterval(trainPoll);
   trainPoll = setInterval(async () => {
     try {
-      const d = await api(`/api/train/${jobId}`).json();
+      const d = await (await api(`/api/train/${jobId}`)).json();
       const tail = (d.log_tail || []).slice(-3).join("\n");
       setStatus($("#train-status"), `status: ${d.status}${tail ? "\n" + tail : ""}`, d.status === "failed" ? "err" : d.status === "done" ? "ok" : "warn");
       if (d.status !== "running") {
@@ -297,7 +297,7 @@ function pollTrain(jobId) {
 
 // ---------------------------------------------------------------- checkpoints --
 async function loadCheckpoints(name) {
-  const d = await api(`/api/voices/${encodeURIComponent(name)}/checkpoints`).json();
+  const d = await (await api(`/api/voices/${encodeURIComponent(name)}/checkpoints`)).json();
   const sel = $("#ckpt-select");
   sel.innerHTML = '<option value="">— none (zero-shot) —</option>';
   for (const r of d.runs) {
@@ -342,7 +342,7 @@ $("#ckpt-clear").addEventListener("click", async () => {
 // ---------------------------------------------------------------- storage --
 async function loadStorage() {
   let d;
-  try { d = await api("/api/storage").json(); } catch { return; }
+  try { d = await (await api("/api/storage")).json(); } catch { return; }
   const base = d.breakdown.find(b => b.key === "base_model") || { bytes: 0 };
   const samples = d.breakdown.find(b => b.key === "voices_samples") || { bytes: 0 };
   $("#storage-summary").innerHTML =
@@ -376,10 +376,10 @@ $("#storage-table").addEventListener("click", async (e) => {
   const [voice, dir] = btn.dataset.delrun.split("::");
   if (!confirm(`Delete run '${dir}' for voice '${voice}'? This cannot be undone.`)) return;
   try {
-    const res = await api("/api/storage/clean", {
+    const res = await (await api("/api/storage/clean", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ voice, action: "run", run: dir }),
-    }).json();
+    })).json();
     setStatus($("#cleanup-status"), `✔ Freed ${fmtBytes(res.freed_bytes)} — deleted ${res.deleted.length} item(s).`, "ok");
     loadStorage(); if (activeVoice === voice) { loadCheckpoints(voice); loadVoices(); }
   } catch (err) { setStatus($("#cleanup-status"), `Cleanup failed: ${err.message}`, "err"); }
@@ -389,7 +389,7 @@ $("#clean-keep-reg").addEventListener("click", async () => {
   const voice = activeVoice; if (!voice) return setStatus($("#cleanup-status"), "No voice selected.", "err");
   if (!confirm(`For '${voice}': delete all runs EXCEPT the registered one?`)) return;
   try {
-    const res = await api("/api/storage/clean", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice, action: "all-but-registered" }) }).json();
+    const res = await (await api("/api/storage/clean", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice, action: "all-but-registered" }) })).json();
     setStatus($("#cleanup-status"), `✔ Freed ${fmtBytes(res.freed_bytes)} — kept the registered checkpoint.`, "ok");
     loadStorage(); loadCheckpoints(voice); loadVoices();
   } catch (err) { setStatus($("#cleanup-status"), `Cleanup failed: ${err.message}`, "err"); }
@@ -399,7 +399,7 @@ $("#clean-reset").addEventListener("click", async () => {
   const voice = activeVoice; if (!voice) return setStatus($("#cleanup-status"), "No voice selected.", "err");
   if (!confirm(`RESET '${voice}': delete ALL fine-tune runs + dataset and clear the checkpoint? Synthesis falls back to zero-shot.`)) return;
   try {
-    const res = await api("/api/storage/clean", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice, action: "reset" }) }).json();
+    const res = await (await api("/api/storage/clean", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice, action: "reset" }) })).json();
     setStatus($("#cleanup-status"), `✔ Reset '${voice}' — freed ${fmtBytes(res.freed_bytes)}, registration cleared.`, "ok");
     loadStorage(); loadCheckpoints(voice); loadVoices();
   } catch (err) { setStatus($("#cleanup-status"), `Cleanup failed: ${err.message}`, "err"); }
