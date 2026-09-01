@@ -210,6 +210,24 @@ def _available_ram_gib() -> float | None:
     return None
 
 
+def _free_vram_gib() -> float | None:
+    """Free VRAM in GiB on the primary CUDA device, or None if not determinable.
+
+    Reports what the driver can still allocate — i.e. it *does* account for
+    memory held by other processes (e.g. a loaded LLM), which is exactly the
+    case this guard exists to catch.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        free, _total = torch.cuda.mem_get_info()
+        return free / (1024**3)
+    except Exception:  # noqa: BLE001 — a query failure must never block training
+        return None
+
+
 def run_finetune(
     voice_name: str,
     epochs: int = 5,
@@ -282,6 +300,17 @@ def run_finetune(
                 "Starting would likely OOM-kill the process and hang the machine. "
                 "Options: free up memory, run on a GPU/larger-RAM machine, or pass --force to start anyway."
             )
+
+        # ---- pre-flight: VRAM guard (fine-tune needs ~12 GB free on the GPU) ----
+        if cuda_ok:
+            free_vram = _free_vram_gib()
+            MIN_VRAM_GIB = 12.0
+            if free_vram is not None and free_vram < MIN_VRAM_GIB and not force:
+                raise VoiceError(
+                    f"Not enough free VRAM to fine-tune safely: {free_vram:.1f} GiB free, "
+                    f"~{MIN_VRAM_GIB:.0f} GiB needed. Other processes (e.g. a loaded LLM) may be "
+                    "holding most of the GPU memory. Options: free up VRAM, or tick 'force' to start anyway."
+                )
 
         # ---- official fine-tuning path ------------------------------------
         import os
