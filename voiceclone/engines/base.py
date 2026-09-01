@@ -21,6 +21,8 @@ class SynthesisResult:
     matched_requested_emotion: bool
     engine: str
     mode: str  # "zero-shot" | "finetuned"
+    device: str | None = None  # actual device used ("cuda" | "cpu")
+    device_note: str | None = None  # e.g. why the engine fell back to CPU
 
 
 class Engine(ABC):

@@ -85,9 +85,15 @@ def is_license_accepted() -> bool:
 class XttsEngine(Engine):
     name = "xtts-v2"
 
+    # XTTS v2 in fp32: ~2.1 GiB of weights plus inference activations and
+    # allocator headroom — below this much free VRAM, loading/generating OOMs.
+    MIN_SYNTH_VRAM_GIB = 6.0
+
     def __init__(self) -> None:
         self._model = None
         self._loaded_for: str | None = None  # checkpoint path we loaded for
+        self._device_used: str | None = None  # actual device of the cached model
+        self._device_note: str | None = None  # e.g. why we fell back to CPU
 
     # ------------------------------------------------------------------ #
     def _device(self) -> str:
@@ -128,10 +134,26 @@ class XttsEngine(Engine):
                 use_deepspeed=False,
             )
         device = self._device()
+        note: str | None = None
+        if device == "cuda":
+            from ..gpu import free_vram_gib
+
+            free = free_vram_gib()
+            if free is not None and free < self.MIN_SYNTH_VRAM_GIB:
+                # The GPU is mostly occupied (e.g. by a loaded LLM): loading the
+                # model would OOM. Fall back to CPU rather than failing — TTS on
+                # CPU is slower but works.
+                note = (
+                    f"only {free:.1f} GiB free on GPU "
+                    f"(~{self.MIN_SYNTH_VRAM_GIB:.0f} GiB needed) — fell back to CPU"
+                )
+                device = "cpu"
         model.to(device)
         model.eval()
         self._model = model
         self._loaded_for = key
+        self._device_used = device
+        self._device_note = note
 
     def warmup(self, finetuned_checkpoint: str | None = None) -> None:
         if not is_license_accepted():
@@ -208,6 +230,8 @@ class XttsEngine(Engine):
             matched_requested_emotion=True,
             engine=self.name,
             mode="finetuned" if finetuned_checkpoint else "zero-shot",
+            device=self._device_used,
+            device_note=self._device_note,
         )
 
 

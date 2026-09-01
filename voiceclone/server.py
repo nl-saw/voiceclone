@@ -243,6 +243,11 @@ def create_app() -> FastAPI:
             "elapsed_s": round(time.time() - t0, 1),
             "output_path": str(outcome.output_path),
         }
+        if outcome.result.device:
+            meta["device"] = (
+                outcome.result.device
+                + (f" — {outcome.result.device_note}" if outcome.result.device_note else "")
+            )
         wav_bytes = _to_wav_bytes(outcome.result.wav, outcome.result.sample_rate)
         return Response(
             content=wav_bytes,

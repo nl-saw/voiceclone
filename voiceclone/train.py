@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import get_settings
+from .gpu import free_vram_gib
 from .voices import Voice, VoiceError
 
 
@@ -210,24 +211,6 @@ def _available_ram_gib() -> float | None:
     return None
 
 
-def _free_vram_gib() -> float | None:
-    """Free VRAM in GiB on the primary CUDA device, or None if not determinable.
-
-    Reports what the driver can still allocate — i.e. it *does* account for
-    memory held by other processes (e.g. a loaded LLM), which is exactly the
-    case this guard exists to catch.
-    """
-    try:
-        import torch
-
-        if not torch.cuda.is_available():
-            return None
-        free, _total = torch.cuda.mem_get_info()
-        return free / (1024**3)
-    except Exception:  # noqa: BLE001 — a query failure must never block training
-        return None
-
-
 def run_finetune(
     voice_name: str,
     epochs: int = 5,
@@ -303,7 +286,7 @@ def run_finetune(
 
         # ---- pre-flight: VRAM guard (fine-tune needs ~12 GB free on the GPU) ----
         if cuda_ok:
-            free_vram = _free_vram_gib()
+            free_vram = free_vram_gib()
             MIN_VRAM_GIB = 12.0
             if free_vram is not None and free_vram < MIN_VRAM_GIB and not force:
                 raise VoiceError(
