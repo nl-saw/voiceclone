@@ -136,7 +136,7 @@ class XttsEngine(Engine):
         device = self._device()
         note: str | None = None
         if device == "cuda":
-            from ..gpu import free_vram_gib
+            from ..memcheck import free_vram_gib
 
             free = free_vram_gib()
             if free is not None and free < self.MIN_SYNTH_VRAM_GIB:

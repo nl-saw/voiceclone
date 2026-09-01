@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import get_settings
-from .gpu import free_vram_gib
+from .memcheck import free_vram_gib
 from .voices import Voice, VoiceError
 
 
