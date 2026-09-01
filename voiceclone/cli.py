@@ -7,7 +7,9 @@ Commands:
   voice           show one voice in detail
   tag             set an emotion tag on a sample
   synthesize      generate speech with a cloned voice (+ sentiment)
-  train           fine-tune an XTTS v2 model on a voice's samples
+  train           fine-tune a per-voice model (engine-specific)
+  engines         list available TTS engines + install status
+  install-engine  install an external engine (repo + dedicated venv + deps)
   serve           start the web UI
 """
 
@@ -71,6 +73,19 @@ def cmd_init(args: argparse.Namespace) -> int:
         t0 = time.time()
         get_whisper(settings.whisper_model)
         console.print(f"[green]✔[/green] Whisper ready ({time.time() - t0:.0f}s)")
+
+        # pre-download weights of installed external engines (Chatterbox pulls
+        # its ~3 GB automatically on first synthesis; CosyVoice is explicit)
+        from .engines import get_spec, installed as _installed
+
+        cv3 = get_spec("cosyvoice3")
+        if _installed(cv3):
+            console.print("[bold]Downloading CosyVoice 3 weights (~6 GB) ...[/bold]")
+            from .engines.cosyvoice import ensure_weights
+
+            t0 = time.time()
+            ensure_weights(lambda m: console.print(f"  {m}"))
+            console.print(f"[green]✔[/green] CosyVoice 3 weights ready ({time.time() - t0:.0f}s)")
 
     console.print("[green]Setup complete.[/green]")
     return 0
@@ -195,6 +210,7 @@ def cmd_remove_sample(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 def cmd_synthesize(args: argparse.Namespace) -> int:
+    from .engines import EngineError, get_spec
     from .synthesize import synthesize
 
     try:
@@ -202,6 +218,12 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
     except VoiceError as e:
         console.print(f"[red]{e}[/red]")
         return 1
+
+    try:
+        spec = get_spec(args.engine)
+    except EngineError as e:
+        console.print(f"[red]{e}[/red]")
+        return 2
 
     text = args.text
     if not text and sys.stdin.isatty():
@@ -219,7 +241,7 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
     out_path = Path(args.output) if args.output else None
 
     console.print(f"Synthesizing with voice [bold]{voice.name}[/bold] "
-                  f"(emotion={emotion or 'auto'}, mode={args.mode}) ...")
+                  f"(engine={spec.name}, emotion={emotion or 'auto'}, mode={args.mode}) ...")
     t0 = time.time()
     try:
         outcome = synthesize(
@@ -229,6 +251,7 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
             style=args.style,
             language=args.lang,
             engine_mode=args.mode,
+            engine_name=spec.name,
             output_path=out_path,
             temperature=args.temp,
             length_penalty=args.length_penalty,
@@ -259,8 +282,18 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 def cmd_train(args: argparse.Namespace) -> int:
+    from .engines import EngineError, get_spec
     from .train import record_finetune, run_finetune
     from .voices import load_voice
+
+    try:
+        spec = get_spec(args.engine)
+    except EngineError as e:
+        console.print(f"[red]{e}[/red]")
+        return 2
+    if not spec.finetune:
+        console.print(f"[red]Engine '{spec.name}' does not support fine-tuning.[/red]")
+        return 2
 
     try:
         v = load_voice(args.voice)
@@ -285,6 +318,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     try:
         report = run_finetune(
             v.name,
+            engine=spec.name,
             epochs=args.epochs,
             batch_size=args.batch_size,
             grad_accum_steps=args.grad_accum,
@@ -299,13 +333,75 @@ def cmd_train(args: argparse.Namespace) -> int:
         return 1
 
     if not args.dry_run and report.checkpoint:
-        record_finetune(v.name, report)
+        record_finetune(v.name, report, engine=spec.name)
         console.print(
-            f"[green]✔[/green] Fine-tuned. Checkpoint: {report.checkpoint}\n"
-            f"Synthesize with it:  voiceclone synthesize --voice {v.name} --mode finetuned \"text\""
+            f"[green]✔[/green] Fine-tuned ({spec.name}). Checkpoint: {report.checkpoint}\n"
+            f"Synthesize with it:  voiceclone synthesize --voice {v.name} --engine {spec.name} --mode finetuned \"text\""
         )
     else:
         console.print(f"[green]✔[/green] Dataset prepared under {report.output_dir}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# engines
+# --------------------------------------------------------------------------- #
+
+def cmd_engines(args: argparse.Namespace) -> int:
+    from .engines import list_engines
+
+    table = Table(title="TTS engines")
+    table.add_column("engine", style="bold")
+    table.add_column("installed")
+    table.add_column("zero-shot")
+    table.add_column("fine-tune")
+    table.add_column("languages")
+    table.add_column("notes")
+    for e in list_engines():
+        table.add_row(
+            e["name"] + (" (default)" if e["is_default"] else ""),
+            "[green]✔[/green]" if e["installed"] else "[red]✘ not installed[/red]",
+            "✔" if e["zero_shot"] else "",
+            "✔" if e["finetune"] else "",
+            ", ".join(e["languages"]),
+            (e["install_hint"] or e["description"])[:80],
+        )
+    console.print(table)
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# install-engine
+# --------------------------------------------------------------------------- #
+
+def cmd_install_engine(args: argparse.Namespace) -> int:
+    import importlib
+
+    from .engines import EngineError, get_spec
+
+    try:
+        spec = get_spec(args.name)
+    except EngineError as e:
+        console.print(f"[red]{e}[/red]")
+        return 2
+    if not spec.extra.get("external"):
+        console.print(f"[yellow]Engine '{spec.name}' is part of the base install — nothing to do.[/yellow]")
+        return 0
+
+    mod = importlib.import_module(spec.module)
+
+    def logline(msg: str) -> None:
+        console.print(f"  {msg}")
+
+    console.print(f"[bold]Installing engine '{spec.name}'[/bold] (clones the repo, creates a "
+                  f"dedicated venv, installs dependencies — this can take a while and use several GB)\n")
+    t0 = time.time()
+    try:
+        mod.ensure_installed(logline=logline)
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[red]Install failed:[/red] {e}")
+        return 1
+    console.print(f"[green]✔[/green] Engine '{spec.name}' installed in {time.time() - t0:.0f}s")
     return 0
 
 
@@ -340,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("add-sample", help="register audio files as samples of a voice")
     sp.add_argument("voice", help="voice name (e.g. alice)")
     sp.add_argument("files", nargs="+", help=".wav/.mp3/.flac/.m4a files with the target speaker's voice")
-    sp.add_argument("--lang", choices=["auto", "en", "nl"], default="auto", help="force language (default: auto-detect)")
+    sp.add_argument("--lang", default="auto", help="force language ISO code (default: auto-detect by Whisper)")
     sp.add_argument("--emotion", default="neutral", choices=PRESET_EMOTIONS, help="emotion tag for these samples")
     sp.add_argument("--note", default="", help="optional note stored with the samples")
     sp.add_argument(
@@ -375,8 +471,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--voice", required=True)
     sp.add_argument("--emotion", choices=PRESET_EMOTIONS, default=None, help="sentiment preset")
     sp.add_argument("--style", default=None, help="free-text style ('whisper this', 'angry and loud') — mapped to the closest preset")
-    sp.add_argument("--lang", choices=["auto", "en", "nl"], default="auto")
+    sp.add_argument("--lang", default="auto", help="force language ISO code (default: auto-detect from samples; engine validates)")
     sp.add_argument("--mode", choices=["auto", "zero-shot", "finetuned"], default="auto")
+    sp.add_argument("--engine", default=None, help="TTS engine to use (default: configured default; see `voiceclone engines`)")
     sp.add_argument("-o", "--output", default=None, help="output .wav path (default: data/output/...)")
     # Generation tuning — all optional; when omitted the XTTS model's own defaults are used.
     sp.add_argument("--temp", type=float, default=None, help="sampling temperature (default 0.5; lower = more committed, fewer skipped words)")
@@ -387,8 +484,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--speed", type=float, default=None, help="speech speed (default 1.0; ~0.9 = clearer/slower, >1 = faster but riskier drops)")
     sp.set_defaults(func=cmd_synthesize)
 
-    sp = sub.add_parser("train", help="fine-tune an XTTS v2 model on a voice's samples")
+    sp = sub.add_parser("engines", help="list available TTS engines + install status")
+    sp.set_defaults(func=cmd_engines)
+
+    sp = sub.add_parser("install-engine", help="install an external engine (repo + dedicated venv + deps)")
+    from .engines import engine_names as _engine_names
+
+    sp.add_argument("name", choices=_engine_names())
+    sp.set_defaults(func=cmd_install_engine)
+
+    sp = sub.add_parser("train", help="fine-tune a per-voice model (engine-specific)")
     sp.add_argument("voice")
+    sp.add_argument("--engine", default=None, help="TTS engine to fine-tune (default: configured default; see `voiceclone engines`)")
     sp.add_argument("--epochs", type=int, default=5)
     sp.add_argument("--batch-size", type=int, default=1)
     sp.add_argument("--grad-accum", type=int, default=4, help="gradient accumulation steps (effective batch = bs * accum)")

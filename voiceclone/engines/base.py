@@ -38,12 +38,22 @@ class Engine(ABC):
         emotion: str = "neutral",
         style: str | None = None,
         finetuned_checkpoint: str | None = None,
+        temperature: float | None = None,
+        length_penalty: float | None = None,
+        repetition_penalty: float | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        speed: float | None = None,
     ) -> SynthesisResult:
         """Synthesize ``text`` in the voice of the reference clip.
 
         ``emotion``/``style`` are hints: engines that support explicit
         sentiment use them directly; others (XTTS v2) realize them through
         reference selection done by the caller.
+
+        The trailing generation parameters are engine-specific tuning hints —
+        an engine that does not support one simply ignores it (``None`` means
+        "use the model's own default").
         """
         raise NotImplementedError
 

@@ -1,12 +1,16 @@
-"""Fine-tuning pipeline for per-voice XTTS v2 models.
+"""Fine-tuning pipeline for per-voice models (engine-specific trainers).
 
-Follows the official coqui fine-tuning recipe (XTTS GPT trainer):
+Shared flow (all engines):
 
-  1. Prepare a dataset from the voice's registered samples:
-     sentence-level WAV clips + pipe-delimited CSV (audio_file|text|speaker_name),
-     split into train/eval, one dataset config per language (bilingual voices OK).
-  2. Run the official GPTTrainer starting from the original XTTS v2 weights.
-  3. Record the resulting checkpoint in the voice profile so synthesis can use it.
+  1. Prepare a dataset from the voice's registered samples: sentence-level WAV
+     clips + pipe-delimited CSV (audio_file|text|speaker_name), split into
+     train/eval, one dataset config per language (bilingual voices OK).
+  2. Pre-flight RAM/VRAM guards (thresholds per engine spec).
+  3. Run the engine's trainer — XTTS v2 uses the official coqui GPT trainer;
+     other engines implement ``finetune()`` in their own module and convert the
+     shared dataset to whatever format they need.
+  4. Record the resulting checkpoint in the voice profile (per-engine slot) so
+     synthesis can use it.
 
 CPU note: fine-tuning on CPU works but is slow (expect hours for a few minutes
 of audio). On a GPU machine this takes minutes-to-an-hour. Use --dry-run to
@@ -33,6 +37,7 @@ from .voices import Voice, VoiceError
 @dataclass
 class TrainReport:
     voice: str
+    engine: str = "xtts-v2"
     n_train: int = 0
     n_eval: int = 0
     total_audio_seconds: float = 0.0
@@ -213,6 +218,130 @@ def _available_ram_gib() -> float | None:
 
 def run_finetune(
     voice_name: str,
+    engine: str = "xtts-v2",
+    epochs: int = 5,
+    batch_size: int = 1,
+    grad_accum_steps: int = 4,
+    dry_run: bool = False,
+    force: bool = False,
+    precision: str = "auto",  # auto | bf16 | fp32
+    lr: float | None = None,  # engine-specific default (lower = closer to base voice)
+    log_path: Path | None = None,
+) -> TrainReport:
+    """Fine-tune a per-voice model with the named engine. Blocks until done (or error).
+
+    XTTS v2 keeps its original trainer path (:func:`_run_finetune_xtts`); other
+    engines run the shared dataset prep + pre-flight guards here and then their
+    own ``finetune()`` implementation in the engine module (see voiceclone/engines).
+    """
+    from .engines import get_spec, installed
+
+    spec = get_spec(engine)
+    if not spec.finetune:
+        raise VoiceError(f"Engine '{engine}' does not support fine-tuning.")
+    if not installed(spec):
+        raise VoiceError(
+            f"Engine '{engine}' is not usable on this machine (missing dependencies). "
+            f"Install hint: {spec.install_hint or 'see README'}"
+        )
+
+    if engine == "xtts-v2":
+        return _run_finetune_xtts(
+            voice_name,
+            epochs=epochs, batch_size=batch_size, grad_accum_steps=grad_accum_steps,
+            dry_run=dry_run, force=force, precision=precision, lr=lr, log_path=log_path,
+        )
+
+    # ---- non-XTTS engines: shared prep, then the engine's own trainer ------
+    import importlib
+
+    from .voices import load_voice
+
+    settings = get_settings()
+    voice = load_voice(voice_name)
+    report = TrainReport(voice=voice.name, engine=engine)
+
+    log = open(log_path, "a", encoding="utf-8") if log_path else None
+
+    def logline(msg: str) -> None:
+        line = f"[{time.strftime('%H:%M:%S')}] {msg}"
+        print(line, flush=True)
+        if log:
+            log.write(line + "\n")
+            log.flush()
+
+    try:
+        logline(f"Preparing dataset for voice '{voice.name}' ...")
+        ds = prepare_dataset(voice, settings.models_dir / f"{voice.name}_traindata")
+        report.n_train = ds["n_train"]
+        report.n_eval = ds["n_eval"]
+        report.languages = ds["languages"]
+        report.output_dir = ds["out_dir"]
+        logline(f"Dataset ready: {ds['n_train']} train / {ds['n_eval']} eval sentences, languages={ds['languages']}")
+
+        import torch
+
+        cuda_ok = torch.cuda.is_available()
+        if precision == "auto":
+            use_bf16 = cuda_ok
+        elif precision == "bf16":
+            if not cuda_ok:
+                raise VoiceError("--precision bf16 requested but no CUDA GPU is available on this machine.")
+            use_bf16 = True
+        else:  # fp32
+            use_bf16 = False
+
+        if dry_run:
+            logline("dry-run: skipping training.")
+            return report
+
+        avail = _available_ram_gib()
+        if spec.min_train_ram_gib and avail is not None and avail < spec.min_train_ram_gib and not force:
+            raise VoiceError(
+                f"Not enough free RAM to fine-tune '{engine}' safely: {avail:.1f} GiB available, "
+                f"~{spec.min_train_ram_gib:.0f} GiB needed. Options: free up memory, run on a larger machine, "
+                "or pass --force to start anyway."
+            )
+
+        if cuda_ok and spec.min_train_vram_gib:
+            free_vram = free_vram_gib()
+            if free_vram is not None and free_vram < spec.min_train_vram_gib and not force:
+                raise VoiceError(
+                    f"Not enough free VRAM to fine-tune '{engine}' safely: {free_vram:.1f} GiB free, "
+                    f"~{spec.min_train_vram_gib:.0f} GiB needed. Options: free up VRAM, or pass --force to start anyway."
+                )
+
+        logline(f"Starting {engine} fine-tune: epochs={epochs} batch_size={batch_size}")
+        mod = importlib.import_module(spec.module)
+        mod.finetune(
+            voice=voice,
+            ds=ds,
+            report=report,
+            logline=logline,
+            epochs=epochs,
+            batch_size=batch_size,
+            grad_accum_steps=grad_accum_steps,
+            precision="bf16" if use_bf16 else "fp32",
+            lr=lr,
+            force=force,
+        )
+        return report
+
+    except BaseException as e:  # noqa: BLE001 — surface any failure in the report (incl. SystemExit)
+        if isinstance(e, SystemExit):
+            report.error = "Trainer aborted with an error — see traceback above"
+        else:
+            report.error = f"{type(e).__name__}: {e}"
+        if log:
+            log.write(f"[{time.strftime('%H:%M:%S')}] FAILED: {report.error}\n")
+        raise
+    finally:
+        if log:
+            log.close()
+
+
+def _run_finetune_xtts(
+    voice_name: str,
     epochs: int = 5,
     batch_size: int = 1,
     grad_accum_steps: int = 4,
@@ -227,7 +356,7 @@ def run_finetune(
 
     settings = get_settings()
     voice = load_voice(voice_name)
-    report = TrainReport(voice=voice.name)
+    report = TrainReport(voice=voice.name, engine="xtts-v2")
 
     log = open(log_path, "a", encoding="utf-8") if log_path else None
 
@@ -449,8 +578,8 @@ def run_finetune(
             log.close()
 
 
-def record_finetune(voice_name: str, report: TrainReport) -> None:
-    """Store the finetuned checkpoint reference in the voice profile."""
+def record_finetune(voice_name: str, report: TrainReport, engine: str | None = None) -> None:
+    """Store the finetuned checkpoint reference in the voice profile (per-engine slot)."""
     from .voices import set_finetuned
 
     if report.checkpoint:
@@ -462,4 +591,5 @@ def record_finetune(voice_name: str, report: TrainReport) -> None:
                 "epochs": None,
                 "n_train_sentences": report.n_train,
             },
+            engine=engine or report.engine or "xtts-v2",
         )

@@ -74,7 +74,14 @@ class Voice:
     dir: Path
     created_at: str = field(default_factory=_now)
     samples: list[Sample] = field(default_factory=list)
-    finetuned: dict | None = None  # {"checkpoint": ..., "trained_at": ..., "epochs": ...}
+    # Fine-tune registrations, keyed by engine name:
+    #   {"xtts-v2": {"checkpoint": ..., "trained_at": ..., ...}, "cosyvoice2": {...}}
+    # Legacy profiles store a single flat dict ({"checkpoint": ...}); it is read as
+    # the "xtts-v2" slot and migrated to the keyed form on next save.
+    finetuned: dict | None = None
+
+    def finetuned_for(self, engine: str) -> dict | None:
+        return normalize_finetuned(self.finetuned).get(engine)
 
     @property
     def total_seconds(self) -> float:
@@ -269,8 +276,35 @@ def remove_sample(name: str, sample_id: str) -> Voice:
     return v
 
 
-def set_finetuned(name: str, info: dict | None) -> Voice:
+def normalize_finetuned(raw: dict | None) -> dict:
+    """Return ``{engine_name: info}`` from a voice's finetuned field.
+
+    Accepts both the current keyed form and the legacy flat form (a single
+    checkpoint record, which belonged to XTTS v2).
+    """
+    if not raw:
+        return {}
+    if "checkpoint" in raw:  # legacy flat format → xtts-v2
+        return {"xtts-v2": raw}
+    return {k: v for k, v in raw.items() if isinstance(v, dict)}
+
+
+def set_finetuned(name: str, info: dict | None, engine: str = "xtts-v2") -> Voice:
+    """Register (or clear, with ``info=None``) the fine-tune slot for one engine."""
     v = load_voice(name)
-    v.finetuned = info
+    slots = normalize_finetuned(v.finetuned)
+    if info is None:
+        slots.pop(engine, None)
+    else:
+        slots[engine] = info
+    v.finetuned = slots or None
+    _save(v)
+    return v
+
+
+def clear_all_finetuned(name: str) -> Voice:
+    """Remove fine-tune registrations for ALL engines (synthesis → zero-shot)."""
+    v = load_voice(name)
+    v.finetuned = None
     _save(v)
     return v

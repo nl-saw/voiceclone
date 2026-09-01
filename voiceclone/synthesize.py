@@ -9,8 +9,7 @@ from pathlib import Path
 from . import audio as A
 from .config import get_settings
 from .emotion import map_style_to_emotion, select_reference
-from .engines.base import SynthesisResult
-from .engines.xtts import LicenseNotAccepted, XttsEngine, is_license_accepted
+from .engines.base import Engine, SynthesisResult
 from .voices import Voice
 
 
@@ -30,7 +29,8 @@ def synthesize(
     language: str | None = None,
     engine_mode: str = "auto",  # auto | zero-shot | finetuned
     output_path: Path | None = None,
-    engine: XttsEngine | None = None,
+    engine_name: str | None = None,  # registry name; None → configured default
+    engine: Engine | None = None,  # explicit instance (tests); wins over engine_name
     temperature: float | None = None,
     length_penalty: float | None = None,
     repetition_penalty: float | None = None,
@@ -82,18 +82,35 @@ def synthesize(
         counts = Counter(s.language for s in voice.samples)
         lang = ref_lang if ref_lang else (counts.most_common(1)[0][0] if counts else "en")
 
-    # --- engine mode ---------------------------------------------------------
-    finetuned_ckpt = None
-    if engine_mode in ("auto", "finetuned") and voice.finetuned:
-        ck = voice.finetuned.get("checkpoint")
-        if ck and Path(ck).exists():
-            finetuned_ckpt = ck
-    if engine_mode == "finetuned" and finetuned_ckpt is None:
+    # --- engine resolution ---------------------------------------------------
+    eng = engine or get_cached_engine(engine_name)
+
+    try:
+        from .engines import EngineError, get_spec
+
+        spec = get_spec(eng.name)
+    except Exception:  # noqa: BLE001 — custom engine instance outside the registry
+        spec = None
+
+    # Language support check (only when we know the engine's language list).
+    if spec is not None and lang not in spec.languages:
         raise ValueError(
-            f"Voice '{voice.name}' has no fine-tuned checkpoint yet. Run `voiceclone train {voice.name}` first."
+            f"Engine '{spec.name}' does not support language '{lang}' "
+            f"(supports: {', '.join(spec.languages)}). Pick a supported language or another "
+            f"engine (see `voiceclone engines`)."
         )
 
-    eng = engine or _default_engine()
+    # --- engine mode ---------------------------------------------------------
+    finetuned_ckpt = None
+    ft_info = voice.finetuned_for(eng.name) if spec is not None else voice.finetuned
+    ck = ft_info.get("checkpoint") if isinstance(ft_info, dict) else None
+    if engine_mode in ("auto", "finetuned") and ck and Path(ck).exists():
+        finetuned_ckpt = ck
+    if engine_mode == "finetuned" and finetuned_ckpt is None:
+        raise ValueError(
+            f"Voice '{voice.name}' has no fine-tuned checkpoint for engine '{eng.name}'. "
+            f"Run `voiceclone train {voice.name} --engine {eng.name}` first."
+        )
     result = eng.synthesize(
         text=text,
         reference_wav_path=str(ref_path),
@@ -146,15 +163,17 @@ def default_output_name(voice_name: str, text: str) -> Path:
     return settings.output_dir / f"{voice_name}_{stamp}_{safe_text}.wav"
 
 
-_engine_singleton: XttsEngine | None = None
+# One engine instance per name: model loading is expensive, and engines cache
+# their loaded weights internally keyed by checkpoint.
+_engine_cache: dict[str, Engine] = {}
 
 
-def _default_engine() -> XttsEngine:
-    global _engine_singleton
-    if not is_license_accepted():
-        raise LicenseNotAccepted()
-    if _engine_singleton is None:
-        from .engines.xtts import get_xtts_engine
+def get_cached_engine(name: str | None = None) -> Engine:
+    from .engines import get_engine
 
-        _engine_singleton = get_xtts_engine()
-    return _engine_singleton
+    from .config import get_settings
+
+    name = name or get_settings().default_engine
+    if name not in _engine_cache:
+        _engine_cache[name] = get_engine(name)
+    return _engine_cache[name]

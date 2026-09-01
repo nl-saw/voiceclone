@@ -9,7 +9,7 @@
 <body>
 <header>
   <div class="brand">🎙️ voiceclone</div>
-  <div class="sub">clone voices from plain audio · synthesize with sentiment · English &amp; Dutch</div>
+  <div class="sub">clone voices from plain audio · synthesize with sentiment · multi-engine (XTTS v2, CosyVoice 3, Chatterbox)</div>
 </header>
 
 <main>
@@ -77,6 +77,9 @@
     </details>
 
     <div class="row spread">
+      <label>Engine
+        <select id="synth-engine"></select>
+      </label>
       <label>Engine mode
         <select id="mode"><option value="auto">auto</option><option value="zero-shot">zero-shot (base model)</option><option value="finetuned">fine-tuned voice model</option></select>
       </label>
@@ -99,11 +102,14 @@
 
     <hr>
     <h3>Fine-tune this voice (optional, higher fidelity)</h3>
-    <p class="hint">Trains a dedicated XTTS v2 model on the samples above. Slow on CPU (hours); fast on GPU.</p>
+    <p class="hint">Trains a dedicated per-voice model on the samples above. Slow on CPU (hours); fast on GPU. CosyVoice 3 uses its official recipe; XTTS v2 the Coqui trainer.</p>
 
     <div id="data-warning" class="data-warning" hidden></div>
 
     <div class="row">
+      <label>Engine
+        <select id="train-engine"></select>
+      </label>
       <label>Epochs <input type="number" id="epochs" value="1" min="1" max="100"></label>
       <label>Lr (lower = safer) <input type="number" id="lr" value="4e-6" step="any" min="0" placeholder="4e-6"></label>
     </div>
@@ -141,7 +147,7 @@
 
     <div id="storage-summary" class="meta"></div>
     <table class="samples" id="storage-table">
-      <thead><tr><th>Voice</th><th>Run</th><th>Size</th><th>Best step</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Voice</th><th>Engine</th><th>Run</th><th>Size</th><th>Best step</th><th>Status</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
 
@@ -158,7 +164,7 @@
 </main>
 
 <footer>
-  Runs fully locally · XTTS v2 weights are non-commercial licensed (CPML) · data lives in <code>data/</code>
+  Runs fully locally · licenses: XTTS v2 CPML (non-commercial), CosyVoice 3 Apache-2.0, Chatterbox MIT · data lives in <code>data/</code>
 </footer>
 <script src="/app.js"></script>
 </body>

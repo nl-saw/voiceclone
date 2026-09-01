@@ -33,6 +33,7 @@ from pydantic import BaseModel
 
 from .config import get_settings
 from .emotion import PRESET_EMOTIONS
+from .engines import EngineError
 from .storage import (
     RECOMMENDED_MIN_AUDIO_S,
     clean_voice,
@@ -58,6 +59,7 @@ class SynthesizeRequest(BaseModel):
     style: str | None = None
     language: str | None = "auto"
     mode: str = "auto"  # auto | zero-shot | finetuned
+    engine: str | None = None  # TTS engine (None = configured default)
     # Optional generation overrides (None = model config default).
     temperature: float | None = None
     length_penalty: float | None = None
@@ -69,6 +71,7 @@ class SynthesizeRequest(BaseModel):
 
 class TrainRequest(BaseModel):
     voice: str
+    engine: str | None = None  # TTS engine (None = configured default)
     epochs: int = 5
     batch_size: int = 1
     grad_accum_steps: int = 4
@@ -83,10 +86,12 @@ class CleanRequest(BaseModel):
     action: str  # run | all-but-registered | reset
     run: str | None = None  # run dir name (only for action="run")
     force: bool = False
+    engine: str | None = None  # restrict to one engine (default: all)
 
 
 class CheckpointRequest(BaseModel):
-    checkpoint: str  # absolute path to an existing best_model_*.pth
+    checkpoint: str  # absolute path to an existing checkpoint file
+    engine: str | None = None  # which engine's registration slot to update (None → xtts-v2)
 
 
 # In-memory job registry (server process lifetime).
@@ -119,6 +124,12 @@ def create_app() -> FastAPI:
     @app.get("/api/emotions")
     def emotions() -> list[str]:
         return PRESET_EMOTIONS
+
+    @app.get("/api/engines")
+    def engines_list() -> list[dict]:
+        from .engines import list_engines
+
+        return list_engines()
 
     @app.get("/api/voices")
     def voices_list() -> list[dict]:
@@ -221,6 +232,7 @@ def create_app() -> FastAPI:
                 style=req.style,
                 language=None if req.language in (None, "auto") else req.language,
                 engine_mode=req.mode,
+                engine_name=req.engine,
                 temperature=req.temperature,
                 length_penalty=req.length_penalty,
                 repetition_penalty=req.repetition_penalty,
@@ -283,9 +295,12 @@ def create_app() -> FastAPI:
         def runner() -> None:
             from .train import record_finetune, run_finetune
 
+            engine = req.engine or settings.default_engine
+
             try:
                 report = run_finetune(
                     v.name,
+                    engine=engine,
                     epochs=req.epochs,
                     batch_size=req.batch_size,
                     grad_accum_steps=req.grad_accum_steps,
@@ -347,7 +362,7 @@ def create_app() -> FastAPI:
     def storage_clean(req: CleanRequest) -> dict:
         try:
             return clean_voice(
-                req.voice, action=req.action, run=req.run, force=req.force
+                req.voice, action=req.action, run=req.run, force=req.force, engine=req.engine
             )
         except VoiceError as e:
             raise HTTPException(400, str(e)) from e
@@ -365,8 +380,8 @@ def create_app() -> FastAPI:
     @app.post("/api/voices/{name}/checkpoint")
     def checkpoint_register(name: str, req: CheckpointRequest) -> dict:
         try:
-            return register_checkpoint(name, req.checkpoint)
-        except VoiceError as e:
+            return register_checkpoint(name, req.checkpoint, engine=req.engine or "xtts-v2")
+        except (VoiceError, EngineError) as e:
             raise HTTPException(400, str(e)) from e
 
     @app.delete("/api/voices/{name}/checkpoint")

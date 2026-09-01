@@ -7,6 +7,7 @@ VOICECLONE_DATA environment variable.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +43,9 @@ class Settings:
     max_ref_seconds: float = 15.0
     # Device preference; auto-detects CUDA if available.
     device: str = "auto"
+    # Default TTS engine (see voiceclone/engines registry). Override per-run with
+    # `--engine` on synthesize/train.
+    default_engine: str = "xtts-v2"
 
     # --- derived paths -----------------------------------------------------
     @property
@@ -71,14 +75,38 @@ class Settings:
             p.mkdir(parents=True, exist_ok=True)
 
 
+# Known settings.json keys → attribute types (unknown keys are ignored).
+_KNOWN_KEYS: dict[str, type] = {
+    "whisper_model": str,
+    "languages": list,
+    "sample_rate": int,
+    "min_ref_seconds": float,
+    "max_ref_seconds": float,
+    "device": str,
+    "default_engine": str,
+}
+
 _settings: Settings | None = None
 
 
 def get_settings() -> Settings:
-    """Return the process-wide settings singleton, loading from disk once."""
+    """Return the process-wide settings singleton, loading from disk once.
+
+    Values in ``<data_dir>/settings.json`` override the defaults (e.g.
+    ``{"default_engine": "cosyvoice2"}``). A missing or broken file is ignored.
+    """
     global _settings
     if _settings is None:
         s = Settings()
+        cfg_file = s.data_dir / "settings.json"
+        if cfg_file.is_file():
+            try:
+                data = json.loads(cfg_file.read_text())
+                for key, typ in _KNOWN_KEYS.items():
+                    if key in data and isinstance(data[key], typ):
+                        setattr(s, key, data[key])
+            except (json.JSONDecodeError, OSError):
+                pass  # broken settings file must not break the toolkit
         s.ensure_dirs()
         _settings = s
     return _settings

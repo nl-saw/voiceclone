@@ -213,6 +213,7 @@ $("#gen-btn").addEventListener("click", async () => {
         style: $("#style").value || null,
         language: $("#syn-lang").value,
         mode: $("#mode").value,
+        engine: $("#synth-engine").value || null,
         ...genParams(),
       }),
     });
@@ -248,8 +249,10 @@ $("#train-btn").addEventListener("click", async () => {
   if (!confirm(msg)) return;
 
   const lrRaw = parseFloat($("#lr").value);
+  const engine = $("#train-engine").value || null;
   const body = {
     voice: activeVoice,
+    engine,
     epochs,
     grad_accum_steps: parseInt($("#grad-accum").value || "4", 10),
     precision: $("#precision").value,
@@ -304,14 +307,16 @@ async function loadCheckpoints(name) {
     for (const b of r.best_models) {
       const opt = document.createElement("option");
       opt.value = `${r.path}/${b.file}`;
-      opt.textContent = `${r.dir} · step ${b.step}`;
+      opt.dataset.engine = r.engine;
+      opt.textContent = `${r.engine} · ${r.dir}${b.step >= 0 ? ` · step ${b.step}` : ""}`;
       sel.appendChild(opt);
     }
   }
-  if (d.registered) {
-    // registered path may be stored resolved or not → match tolerantly by tail
-    const reg = d.registered.replace(/\/+$/, "");
-    const hit = [...sel.options].find(o => o.value === reg || reg.endsWith(o.value) || o.value.endsWith(reg));
+  // registered is a map: {engine: checkpoint_path} (one per engine)
+  for (const [engine, raw] of Object.entries(d.registered || {})) {
+    const reg = String(raw).replace(/\/+$/, "");
+    const hit = [...sel.options].find(o => o.dataset.engine === engine &&
+      (o.value === reg || reg.endsWith(o.value) || o.value.endsWith(reg)));
     if (hit) sel.value = hit.value;
   }
 }
@@ -320,9 +325,11 @@ $("#ckpt-apply").addEventListener("click", async () => {
   if (!activeVoice) return setStatus($("#ckpt-status"), "No voice selected.", "err");
   const ckpt = $("#ckpt-select").value;
   if (!ckpt) return setStatus($("#ckpt-status"), "Pick a checkpoint first (or use Clear).", "err");
+  const opt = [...$("#ckpt-select").options].find(o => o.value === ckpt);
   try {
     await api(`/api/voices/${encodeURIComponent(activeVoice)}/checkpoint`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkpoint: ckpt }),
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checkpoint: ckpt, engine: opt?.dataset.engine || null }),
     });
     setStatus($("#ckpt-status"), `✔ ${activeVoice} now uses: ${ckpt.split("/").slice(-2).join("/")}`, "ok");
     loadCheckpoints(activeVoice); loadVoices(); loadStorage();
@@ -352,7 +359,7 @@ async function loadStorage() {
   const tbody = $("#storage-table tbody");
   tbody.innerHTML = "";
   if (!d.runs.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="hint">No fine-tune runs on disk yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="hint">No fine-tune runs on disk yet.</td></tr>';
   }
   for (const r of d.runs) {
     const bestStep = r.best_models.length ? Math.max(...r.best_models.map(b => b.step)) : "—";
@@ -360,6 +367,7 @@ async function loadStorage() {
     const badge = r.registered ? '<span class="badge reg">registered</span>' : "";
     tr.innerHTML = `
       <td>${esc(r.voice)}</td>
+      <td>${esc(r.engine || "?")}</td>
       <td title="${esc(r.dir)}">${esc(r.dir)}</td>
       <td class="size">${fmtBytes(r.bytes)}</td>
       <td>${bestStep}</td>
@@ -421,7 +429,8 @@ $("#ab-btn").addEventListener("click", async () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         voice: activeVoice, text, emotion: selectedEmotion,
-        style: $("#style").value || null, language: $("#syn-lang").value, mode, ...genParams(),
+        style: $("#style").value || null, language: $("#syn-lang").value, mode,
+        engine: $("#synth-engine").value || null, ...genParams(),
       }),
     });
     const blob = await res.blob();
@@ -468,10 +477,33 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+async function loadEngines() {
+  let engines = [];
+  try { engines = await (await api("/api/engines")).json(); } catch { return; }
+  const opts = engines.map(e => {
+    const mark = e.is_default ? " (default)" : "";
+    const avail = e.installed ? "" : " — not installed";
+    return `<option value="${esc(e.name)}" ${e.is_default ? "selected" : ""}>${esc(e.name)}${mark}${avail}</option>`;
+  }).join("");
+  for (const id of ["synth-engine", "train-engine"]) {
+    const sel = document.getElementById(id);
+    if (sel) sel.innerHTML = opts;
+  }
+  // fine-tune engines only make sense in the train selector
+  const tr = document.getElementById("train-engine");
+  if (tr && tr.options.length) {
+    for (const o of [...tr.options]) {
+      const e = engines.find(x => x.name === o.value);
+      if (e && !e.finetune) o.textContent += " (no fine-tune)";
+    }
+  }
+}
+
 (async function init() {
   try { EMOTIONS = await (await api("/api/emotions")).json(); } catch {}
   $("#up-emotion").innerHTML = EMOTIONS.map(e => `<option>${e}</option>`).join("");
   renderEmotionChips();
+  await loadEngines();
   await loadVoices();
   loadStorage().catch(() => {});
 })();
