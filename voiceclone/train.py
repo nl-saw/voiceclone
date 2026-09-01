@@ -15,10 +15,12 @@ prepare data without training.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 import re
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -158,6 +160,43 @@ def _find_latest_checkpoint(output_path: Path) -> Path | None:
     if not fallback:
         return None
     return max(fallback, key=lambda p: p.stat().st_mtime)
+
+
+@contextlib.contextmanager
+def _tee_stdout(log):
+    """Mirror sys.stdout into the train log file while active.
+
+    coqui's ``Trainer.fit()`` swallows training errors: it prints them via
+    ``traceback.print_exc()`` (stdout) and then calls ``sys.exit(1)``, so the
+    real exception (e.g. CUDA OOM) only reaches us as a bare SystemExit unless
+    we capture what it printed.
+    """
+    if log is None:
+        yield
+        return
+
+    class _Tee:
+        def __init__(self, primary, secondary):
+            self.primary = primary
+            self.secondary = secondary
+
+        def write(self, s):
+            self.primary.write(s)
+            try:
+                self.secondary.write(s)
+                self.secondary.flush()
+            except Exception:  # noqa: BLE001 — logging must never break training
+                pass
+
+        def flush(self):
+            self.primary.flush()
+
+    orig = sys.stdout
+    sys.stdout = _Tee(orig, log)
+    try:
+        yield
+    finally:
+        sys.stdout = orig
 
 
 def _available_ram_gib() -> float | None:
@@ -360,7 +399,7 @@ def run_finetune(
         logline(f"Starting trainer: epochs={epochs} batch_size={batch_size} grad_accum={grad_accum_steps}")
         from trainer.logging.dummy_logger import DummyLogger
 
-        with legacy_torch_load():  # trainer may torch.load checkpoints during fit
+        with legacy_torch_load(), _tee_stdout(log):  # tee stdout so the trainer's failure traceback lands in our log
             trainer = Trainer(
                 TrainerArgs(
                     restore_path=None,
@@ -385,8 +424,11 @@ def run_finetune(
         logline(f"Done. Checkpoint: {ckpt}")
         return report
 
-    except Exception as e:  # noqa: BLE001 — surface any failure in the report
-        report.error = f"{type(e).__name__}: {e}"
+    except BaseException as e:  # noqa: BLE001 — surface any failure in the report (incl. SystemExit from trainer.fit)
+        if isinstance(e, SystemExit):
+            report.error = "Trainer aborted with an error — see traceback above"
+        else:
+            report.error = f"{type(e).__name__}: {e}"
         if log:
             log.write(f"[{time.strftime('%H:%M:%S')}] FAILED: {report.error}\n")
         raise

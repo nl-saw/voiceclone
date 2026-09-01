@@ -297,7 +297,7 @@ def create_app() -> FastAPI:
                     job["status"] = "done"
                     job["finished_at"] = time.time()
                     job["checkpoint"] = report.checkpoint
-            except Exception as e:  # noqa: BLE001
+            except BaseException as e:  # noqa: BLE001 — incl. SystemExit raised by trainer.fit() on failure
                 with _jobs_lock:
                     job = _jobs[job_id]
                     job["status"] = "failed"

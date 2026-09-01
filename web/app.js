@@ -280,7 +280,7 @@ function pollTrain(jobId) {
     try {
       const d = await (await api(`/api/train/${jobId}`)).json();
       const tail = (d.log_tail || []).slice(-3).join("\n");
-      setStatus($("#train-status"), `status: ${d.status}${tail ? "\n" + tail : ""}`, d.status === "failed" ? "err" : d.status === "done" ? "ok" : "warn");
+      setStatus($("#train-status"), `status: ${d.status}${d.error ? "\n" + d.error : ""}${tail ? "\n" + tail : ""}`, d.status === "failed" ? "err" : d.status === "done" ? "ok" : "warn");
       if (d.status !== "running") {
         clearInterval(trainPoll);
         trainPoll = null;
