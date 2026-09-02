@@ -118,8 +118,6 @@ To force the full install again (re-apply pins/patches,
 reinstall the pinned package into the existing venv): 
 `uv run voiceclone install-engine <name> --force`.
 
-Set the default engine in `data/settings.json`: `{"default_engine": "cosyvoice3"}`.
-
 ## How sentiment works
 
 XTTS v2 has no explicit "emotion" parameter — emotional tone is largely carried
