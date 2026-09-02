@@ -216,12 +216,24 @@ def ensure_installed(logline=print) -> None:
     eng = _engine()
     engine_dir = eng.engine_dir
     engine_dir.mkdir(parents=True, exist_ok=True)
-    if (engine_dir / "installed.json").exists():
+    venv_py = eng.venv_python()
+    # The marker alone is not enough: the venv's bin/python is a symlink to the
+    # uv-managed CPython, and if that interpreter was deleted (e.g. cleaning up
+    # ~/.local/share/uv after a disk-space problem) the link dangles and the
+    # engine is dead despite the marker. Fall through to the fresh path then —
+    # it rebuilds the venv into the project's own cache dir (repo is reused).
+    if (engine_dir / "installed.json").exists() and venv_py.exists():
         _ensure_torch(eng, logline)  # repairs venvs from before the fix
         _patch_repo_io(engine_dir / "repo", logline)  # same
         _patch_deepspeed_compat(eng, logline)  # same
         logline("Already installed.")
         return
+
+    # Fresh/repair path: drop any stale marker first. Without this, a run that
+    # dies mid-way (e.g. disk full) after rebuilding the venv would leave a
+    # marker claiming success while dependencies are still missing — the next
+    # run would then short-circuit into "Already installed" with a broken engine.
+    (engine_dir / "installed.json").unlink(missing_ok=True)
 
     # 1. repo -----------------------------------------------------------------
     repo = engine_dir / "repo"
@@ -235,8 +247,7 @@ def ensure_installed(logline=print) -> None:
         _run_streaming(["git", "-C", str(repo), "submodule", "update", "--init", "--recursive"], logline)
     _patch_repo_io(repo, logline)
 
-    # 2. venv -----------------------------------------------------------------
-    venv_py = eng.venv_python()
+    # 2. venv (venv_py from the top of this function) -------------------------
     uv = shutil.which("uv")
     reqs = repo / "requirements.txt"
     if not reqs.exists():
@@ -245,8 +256,12 @@ def ensure_installed(logline=print) -> None:
     if not venv_py.exists():
         if uv:
             logline(f"Creating Python {PYTHON_VERSION} venv with uv (interpreter may be downloaded) ...")
+            # UV_VENV_CLEAR: replace the directory if a broken/old venv is still
+            # there (newer uv refuses to overwrite without it; env form works on
+            # all uv versions, unlike the --clear flag).
             _run_streaming(
-                [uv, "venv", "--python", PYTHON_VERSION, str(engine_dir / "venv")], logline, env=env
+                [uv, "venv", "--python", PYTHON_VERSION, str(engine_dir / "venv")], logline,
+                env={**env, "UV_VENV_CLEAR": "1"},
             )
         else:
             py = shutil.which(f"python{PYTHON_VERSION}") or shutil.which("python3.10")
