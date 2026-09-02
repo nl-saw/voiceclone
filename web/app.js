@@ -187,9 +187,31 @@ function renderEmotionChips() {
   }
 }
 
+// The advanced generation settings only affect XTTS v2 — CosyVoice 3 and
+// Chatterbox accept but silently ignore them. Grey the section out for those.
+function advSupported() {
+  const sel = $("#synth-engine");
+  return !sel || sel.value === "xtts-v2";
+}
+
+function updateAdvancedAvailability() {
+  const box = $("#adv-settings");
+  if (!box) return;
+  const ok = advSupported();
+  for (const inp of box.querySelectorAll("input")) inp.disabled = !ok;
+  box.classList.toggle("disabled", !ok);
+  $("#adv-hint").textContent = ok
+    ? "(optional — blank = model default)"
+    : `(not supported by ${$("#synth-engine").value} — XTTS v2 only)`;
+}
+
+$("#synth-engine").addEventListener("change", updateAdvancedAvailability);
+
 // Read the optional advanced generation settings; empty fields are omitted so
-// the server falls back to the model's own defaults (None).
+// the server falls back to the model's own defaults (None). Values are not sent
+// at all when the selected engine ignores them.
 function genParams() {
+  if (!advSupported()) return {};
   const p = {};
   const num = (id) => {
     const raw = document.getElementById(id).value.trim();
@@ -519,6 +541,7 @@ async function loadEngines() {
   $("#up-emotion").innerHTML = EMOTIONS.map(e => `<option>${e}</option>`).join("");
   renderEmotionChips();
   await loadEngines();
+  updateAdvancedAvailability();
   await loadVoices();
   loadStorage().catch(() => {});
 })();
