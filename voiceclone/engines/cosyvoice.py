@@ -148,7 +148,13 @@ def ensure_installed(logline=print) -> None:
         # build with the venv's own environment (--no-build-isolation), which
         # means pre-installing setuptools<81 (newer dropped pkg_resources),
         # numpy and torch first.
-        _run_streaming([uv, "pip", "install", "--python", str(venv_py), "setuptools<81", "wheel"], logline)
+        #
+        # wheel-stub is needed too: tensorrt-cu12 / -libs on PyPI are tiny
+        # "stub" sdists whose build backend (wheel_stub.buildapi) downloads
+        # the real wheel from pypi.nvidia.com at build time (~4 GB for
+        # tensorrt-cu12-libs). With --no-build-isolation that backend must be
+        # importable from the venv itself, so it is pre-installed here.
+        _run_streaming([uv, "pip", "install", "--python", str(venv_py), "setuptools<81", "wheel", "wheel-stub"], logline)
         _run_streaming([
             uv, "pip", "install", "--python", str(venv_py),
             "torch==2.3.1", "torchaudio==2.3.1", "numpy==1.26.4",
