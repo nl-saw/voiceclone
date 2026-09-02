@@ -508,9 +508,19 @@ def finetune(
     if lr:
         cmd += ["--train_conf.optim_conf.lr", str(lr)]
 
+    # torchrun's child process only gets the *script's* dir (cosyvoice/bin/) on
+    # sys.path, and the repo is not pip-installed into the venv — without this,
+    # train.py dies with "ModuleNotFoundError: No module named 'cosyvoice'".
+    # Mirror what the inference worker does to its own sys.path.
+    train_env = dict(os.environ)
+    pp = train_env.get("PYTHONPATH", "")
+    train_env["PYTHONPATH"] = os.pathsep.join(
+        [str(repo), str(repo / "third_party" / "Matcha-TTS")] + ([pp] if pp else [])
+    )
+
     logline(f"Training CV3 LLM: epochs={epochs} backend={'nccl' if cuda_ok else 'glo'} "
             f"({'GPU' if cuda_ok else 'CPU — expect this to be very slow'})")
-    _run_streaming(cmd, logline, cwd=str(work))
+    _run_streaming(cmd, logline, cwd=str(work), env=train_env)
 
     # 4. average the best checkpoints --------------------------------------------
     dst_llm = exp_dir / "llm.pt"
