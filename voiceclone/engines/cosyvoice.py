@@ -204,6 +204,41 @@ def _patch_repo_io(repo: Path, logline) -> None:
                     "torchaudio I/O would need torchcodec (system FFmpeg)")
 
 
+def _patch_train_utils_join(repo: Path, logline) -> None:
+    """Fix ``cosyvoice_join`` for torch >= 2.x.
+
+    The repo reads the join-barrier timeout as ``group_join.options._timeout``,
+    an attribute torch removed from ProcessGroup in 2.x. The resulting
+    AttributeError is not a RuntimeError, so it escapes the "uneven workload"
+    handler and kills every training run on the second batch. Fall back to
+    monitored_barrier's default timeout (behavior-identical for single-GPU
+    fine-tuning, where the barrier trivially succeeds). Idempotent; warns if
+    upstream changed the lines.
+    """
+    f = repo / "cosyvoice" / "utils" / "train_utils.py"
+    if not f.exists():
+        logline("warning: cosyvoice/utils/train_utils.py not found — skipping join patch")
+        return
+    src = f.read_text()
+    old = (
+        "            dist.monitored_barrier(group=group_join,\n"
+        "                                   timeout=group_join.options._timeout)\n"
+    )
+    new = (
+        "            try:\n"
+        "                _join_timeout = group_join.options._timeout  # torch < 2.x\n"
+        "            except AttributeError:\n"
+        "                _join_timeout = None  # torch >= 2.x removed ProcessGroup.options; default timeout\n"
+        "            dist.monitored_barrier(group=group_join, timeout=_join_timeout)\n"
+    )
+    if old in src:
+        f.write_text(src.replace(old, new))
+        logline("Patched cosyvoice_join for torch >= 2.x (train_utils.py)")
+    elif "_join_timeout" not in src:
+        logline("warning: expected pattern missing in train_utils.py — upstream may have changed; "
+                "training would crash with \"ProcessGroup ... has no attribute 'options'\"")
+
+
 def _filtered_requirements(reqs: Path, engine_dir: Path) -> Path:
     """requirements.txt minus the torch/torchaudio pins.
 
@@ -235,6 +270,7 @@ def ensure_installed(logline=print) -> None:
     if (engine_dir / "installed.json").exists() and venv_py.exists():
         _ensure_torch(eng, logline)  # repairs venvs from before the fix
         _patch_repo_io(engine_dir / "repo", logline)  # same
+        _patch_train_utils_join(engine_dir / "repo", logline)  # same
         _patch_deepspeed_compat(eng, logline)  # same
         logline("Already installed.")
         return
@@ -256,6 +292,7 @@ def ensure_installed(logline=print) -> None:
         logline("Updating git submodules (Matcha-TTS) ...")
         _run_streaming(["git", "-C", str(repo), "submodule", "update", "--init", "--recursive"], logline)
     _patch_repo_io(repo, logline)
+    _patch_train_utils_join(repo, logline)
 
     # 2. venv (venv_py from the top of this function) -------------------------
     uv = shutil.which("uv")
