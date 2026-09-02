@@ -27,7 +27,7 @@ from pathlib import Path
 
 from ..config import get_settings
 from .base import SynthesisResult  # noqa: F401 — re-exported for typing
-from .external import ExternalEngine, ExternalEngineError
+from .external import ExternalEngine, ExternalEngineError, installer_env
 
 REPO_URL = "https://github.com/FunAudioLLM/CosyVoice.git"
 HF_MODEL_ID = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512"
@@ -113,7 +113,7 @@ def _ensure_torch(eng: CosyVoice3Engine, logline) -> None:
         else [str(venv_py), "-m", "pip", "install"]
     )
     logline(f"Ensuring torch >= 2.9 for Blackwell GPUs (upstream pins 2.3.1) ...")
-    _run_streaming(cmd + [TORCH_PIN, TORCHAUDIO_PIN], logline)
+    _run_streaming(cmd + [TORCH_PIN, TORCHAUDIO_PIN], logline, env=installer_env())
 
 
 def _patch_deepspeed_compat(eng: CosyVoice3Engine, logline) -> None:
@@ -228,7 +228,7 @@ def ensure_installed(logline=print) -> None:
     if not (repo / ".git").exists():
         logline(f"Cloning {REPO_URL} → {repo}")
         _run_streaming(
-            ["git", "clone", "--recursive", REPO_URL, str(repo)], logline
+            ["git", "clone", "--recursive", REPO_URL, str(repo)], logline, env=installer_env()
         )
     elif not (repo / "third_party" / "Matcha-TTS").exists():
         logline("Updating git submodules (Matcha-TTS) ...")
@@ -241,11 +241,12 @@ def ensure_installed(logline=print) -> None:
     reqs = repo / "requirements.txt"
     if not reqs.exists():
         raise RuntimeError(f"{reqs} not found — is the repo clone complete?")
+    env = installer_env()  # caches/temp inside the project, not the home dir
     if not venv_py.exists():
         if uv:
             logline(f"Creating Python {PYTHON_VERSION} venv with uv (interpreter may be downloaded) ...")
             _run_streaming(
-                [uv, "venv", "--python", PYTHON_VERSION, str(engine_dir / "venv")], logline
+                [uv, "venv", "--python", PYTHON_VERSION, str(engine_dir / "venv")], logline, env=env
             )
         else:
             py = shutil.which(f"python{PYTHON_VERSION}") or shutil.which("python3.10")
@@ -255,7 +256,7 @@ def ensure_installed(logline=print) -> None:
                     "Install uv: https://docs.astral.sh/uv/"
                 )
             logline(f"Creating venv with {py} ...")
-            _run_streaming([py, "-m", "venv", str(engine_dir / "venv")], logline)
+            _run_streaming([py, "-m", "venv", str(engine_dir / "venv")], logline, env=env)
 
     # 3. dependencies (idempotent; fast no-op when already satisfied) ----------
     logline(f"Installing CosyVoice dependencies ({TORCH_PIN.split('==')[0]}, transformers 4.51.3, ...) — this takes a while")
@@ -266,8 +267,9 @@ def ensure_installed(logline=print) -> None:
     # deepspeed as pure Python (no compiled ops); that is all we need, since
     # CosyVoice fine-tuning runs with --train_engine torch_ddp and only uses
     # deepspeed for its Python-side utilities. Build-time env only — the
-    # worker process never sees it.
-    install_env = {**os.environ, "DS_ACCELERATOR": "cpu"}
+    # worker process never sees it. installer_env() keeps uv/pip caches and
+    # temp files inside the project (see external.py).
+    install_env = {**env, "DS_ACCELERATOR": "cpu"}
     if uv:
         # upstream requirements.txt pulls from official vendor indexes
         # (pytorch cu121, onnxruntime-cuda-12); uv needs the best-match
@@ -326,7 +328,7 @@ def ensure_weights(logline=print) -> Path:
         "from huggingface_hub import snapshot_download; "
         f"snapshot_download({HF_MODEL_ID!r}, local_dir={str(model_dir)!r})"
     )
-    _run_streaming([str(eng.venv_python()), "-c", code], logline)
+    _run_streaming([str(eng.venv_python()), "-c", code], logline, env=installer_env())
     if not (model_dir / "llm.pt").exists():
         raise RuntimeError(f"Download finished but {model_dir}/llm.pt is missing")
     return model_dir

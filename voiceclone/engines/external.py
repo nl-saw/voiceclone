@@ -49,6 +49,33 @@ class ExternalEngineError(Exception):
     pass
 
 
+def installer_env() -> dict[str, str]:
+    """Environment for install subprocesses that keeps every cache in the project.
+
+    By default uv and pip write to the user's home directory (``~/.cache/uv`` alone
+    easily reaches 10+ GB during an engine install) and temp files go to ``/tmp`` —
+    on a machine with a small home partition or a different drive that is not the
+    project's, installs die mid-way with "no space left". Redirect everything under
+    ``data/cache`` (shared across engines, so e.g. torch wheels are cached once) and
+    temp files to ``data/tmp``. Values already set by the user take precedence.
+    """
+    s = get_settings()
+    env = os.environ.copy()
+    for key, sub in (
+        ("UV_CACHE_DIR", "uv"),
+        ("UV_PYTHON_INSTALL_DIR", "uv-python"),
+        ("PIP_CACHE_DIR", "pip"),
+        ("HF_HOME", "hf"),
+    ):
+        if key not in os.environ:
+            env[key] = str(s.cache_dir / sub)
+    if not os.environ.get("TMPDIR"):
+        tmp = s.data_dir / "tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        env["TMPDIR"] = str(tmp)
+    return env
+
+
 class ExternalEngine(Engine):
     """Base class for engines running in their own venv via a worker process."""
 

@@ -16,6 +16,7 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -518,7 +519,25 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _pin_caches_to_project() -> None:
+    """Keep tool caches inside the project (data/cache, data/tmp).
+
+    User-set values win. This makes engine installs and weight downloads land on
+    the drive where voiceclone lives instead of the home partition — important on
+    machines with a small home dir (see engines/external.py::installer_env).
+    """
+    s = get_settings()
+    for key, sub in (("UV_CACHE_DIR", "uv"), ("UV_PYTHON_INSTALL_DIR", "uv-python"),
+                     ("PIP_CACHE_DIR", "pip"), ("HF_HOME", "hf")):
+        os.environ.setdefault(key, str(s.cache_dir / sub))
+    if not os.environ.get("TMPDIR"):
+        tmp = s.data_dir / "tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        os.environ["TMPDIR"] = str(tmp)
+
+
 def main(argv: list[str] | None = None) -> int:
+    _pin_caches_to_project()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

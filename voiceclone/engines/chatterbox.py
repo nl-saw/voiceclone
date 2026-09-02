@@ -23,7 +23,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .external import ExternalEngine, ExternalEngineError
+from .external import ExternalEngine, ExternalEngineError, installer_env
 
 # V3 multilingual (23 languages incl. Dutch) is not on PyPI yet — the newest
 # release (0.1.7) only ships the legacy V2 checkpoint. Install from git, pinned
@@ -55,9 +55,9 @@ class ChatterboxEngine(ExternalEngine):
         return {"HF_HOME": str(self.engine_dir / "hf")}
 
 
-def _run_streaming(cmd: list[str], logline, cwd: str | None = None) -> None:
+def _run_streaming(cmd: list[str], logline, cwd: str | None = None, env: dict | None = None) -> None:
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd, env=env
     )
     assert proc.stdout is not None
     tail: list[str] = []
@@ -93,7 +93,7 @@ def _ensure_torch(eng: ChatterboxEngine, logline) -> None:
         else [str(venv_py), "-m", "pip", "install"]
     )
     logline(f"Ensuring {TORCH_PIN.split('==')[0]} >= 2.9 for Blackwell GPUs (upstream pins 2.6.0) ...")
-    _run_streaming(cmd + [TORCH_PIN, TORCHAUDIO_PIN], logline)
+    _run_streaming(cmd + [TORCH_PIN, TORCHAUDIO_PIN], logline, env=installer_env())
 
 
 def ensure_installed(logline=print) -> None:
@@ -112,10 +112,11 @@ def ensure_installed(logline=print) -> None:
 
     venv_py = eng.venv_python()
     uv = shutil.which("uv")
+    env = installer_env()  # caches/temp inside the project, not the home dir
     if not venv_py.exists():
         if uv:
             logline(f"Creating Python {PYTHON_VERSION} venv with uv (interpreter may be downloaded) ...")
-            _run_streaming([uv, "venv", "--python", PYTHON_VERSION, str(engine_dir / "venv")], logline)
+            _run_streaming([uv, "venv", "--python", PYTHON_VERSION, str(engine_dir / "venv")], logline, env=env)
         else:
             py = shutil.which(f"python{PYTHON_VERSION}") or shutil.which("python3.10")
             if not py:
@@ -124,16 +125,16 @@ def ensure_installed(logline=print) -> None:
                     "Install uv: https://docs.astral.sh/uv/"
                 )
             logline(f"Creating venv with {py} ...")
-            _run_streaming([py, "-m", "venv", str(engine_dir / "venv")], logline)
+            _run_streaming([py, "-m", "venv", str(engine_dir / "venv")], logline, env=env)
 
     # dependencies (idempotent; fast no-op when already satisfied). Upstream's
     # torch==2.6.0 pin comes in here and is replaced by _ensure_torch below.
     logline(f"Installing {PIP_PACKAGE} — this takes a while")
     if uv:
-        _run_streaming([uv, "pip", "install", "--python", str(venv_py), PIP_PACKAGE], logline)
+        _run_streaming([uv, "pip", "install", "--python", str(venv_py), PIP_PACKAGE], logline, env=env)
     else:
-        _run_streaming([str(venv_py), "-m", "pip", "install", "-U", "pip"], logline)
-        _run_streaming([str(venv_py), "-m", "pip", "install", PIP_PACKAGE], logline)
+        _run_streaming([str(venv_py), "-m", "pip", "install", "-U", "pip"], logline, env=env)
+        _run_streaming([str(venv_py), "-m", "pip", "install", PIP_PACKAGE], logline, env=env)
 
     _ensure_torch(eng, logline)
 

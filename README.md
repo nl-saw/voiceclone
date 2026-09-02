@@ -116,6 +116,15 @@ uv run voiceclone install-engine chatterbox     # pip chatterbox-tts into a py3.
 # CosyVoice weights (~6 GB) download automatically on first use (or: voiceclone init --download)
 ```
 
+**Disk usage & caches.** Everything the toolkit writes lives under the project's
+`data/` directory — including package caches (`data/cache/uv`, `data/cache/pip`,
+`data/cache/hf`) and temp files (`data/tmp`). Installs therefore land on the drive
+where voiceclone sits, not on your home partition. The caches are shared between
+engines (e.g. torch wheels are stored once) and safe to delete at any time
+(`rm -rf data/cache` — they will be re-downloaded if needed). If you also want
+`uv` itself (outside `voiceclone`) to use the project cache, set
+`export UV_CACHE_DIR=$PWD/data/cache/uv` in your shell.
+
 **Considered, not integrated:** F5-TTS (excellent code, but pretrained weights
 are CC-BY-NC and officially zh/en only), GPT-SoVITS (MIT + strong 1-minute
 few-shot pipeline, but git-clone-only packaging with heavy sys.path hacks and
