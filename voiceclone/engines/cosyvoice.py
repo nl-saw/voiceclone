@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -50,6 +51,15 @@ class CosyVoice3Engine(ExternalEngine):
     @property
     def model_dir(self) -> Path:
         return self.engine_dir / "models" / MODEL_DIRNAME
+
+    def _ensure_worker(self):
+        # Weights (~6 GB) auto-download on first use, as the README promises.
+        # Without this hook a fresh machine fails inside the worker with
+        # modelscope's "The request model: <local path> does not exist!" —
+        # CosyVoice's AutoModel treats a missing local dir as a hub model id.
+        # No-op (one filesystem check) once llm.pt is present.
+        ensure_weights(lambda m: print(f"[cosyvoice3] {m}", file=sys.stderr, flush=True))
+        super()._ensure_worker()
 
 
 def _engine() -> CosyVoice3Engine:
