@@ -27,8 +27,9 @@ from .external import ExternalEngine, ExternalEngineError, installer_env
 
 # V3 multilingual (23 languages incl. Dutch) is not on PyPI yet — the newest
 # release (0.1.7) only ships the legacy V2 checkpoint. Install from git, pinned
-# to a known-good commit. To upgrade: bump GIT_REF and delete
-# data/engines/chatterbox/installed.json (then re-run install-engine).
+# to a known-good commit. To upgrade: bump GIT_REF and run
+# `voiceclone install-engine chatterbox --force` (reinstalls the package into
+# the existing venv; no update check happens automatically on purpose).
 GIT_REF = "5de7a54aa4e5"  # master @ 2026-07-21 (V3 + single-language pack)
 PIP_PACKAGE = f"chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git@{GIT_REF}"
 PYTHON_VERSION = "3.10"  # upstream supports 3.10+

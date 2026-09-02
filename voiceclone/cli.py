@@ -389,6 +389,12 @@ def cmd_install_engine(args: argparse.Namespace) -> int:
         console.print(f"[yellow]Engine '{spec.name}' is part of the base install — nothing to do.[/yellow]")
         return 0
 
+    if args.force:
+        marker = get_settings().data_dir / "engines" / spec.name / "installed.json"
+        if marker.exists():
+            marker.unlink()
+            console.print("[yellow]--force: removed install marker — running the full install path[/yellow]")
+
     mod = importlib.import_module(spec.module)
 
     def logline(msg: str) -> None:
@@ -492,6 +498,10 @@ def build_parser() -> argparse.ArgumentParser:
     from .engines import engine_names as _engine_names
 
     sp.add_argument("name", choices=_engine_names())
+    sp.add_argument("--force", action="store_true",
+                    help="re-run the full install path even if already installed "
+                         "(re-applies pins/patches, reinstalls the pinned package; "
+                         "existing repo/venv are reused)")
     sp.set_defaults(func=cmd_install_engine)
 
     sp = sub.add_parser("train", help="fine-tune a per-voice model (engine-specific)")

@@ -116,6 +116,12 @@ uv run voiceclone install-engine chatterbox     # pip chatterbox-tts into a py3.
 # CosyVoice weights (~6 GB) download automatically on first use (or: voiceclone init --download)
 ```
 
+Installs are idempotent — re-running prints "Already installed" after re-checking
+the torch pins and patches (no upstream update check; engine versions are pinned
+on purpose). To force the full install path again (re-apply pins/patches,
+reinstall the pinned package into the existing venv): `uv run voiceclone
+install-engine <name> --force`.
+
 **Disk usage & caches.** Everything the toolkit writes lives under the project's
 `data/` directory — including package caches (`data/cache/uv`, `data/cache/pip`,
 `data/cache/hf`) and temp files (`data/tmp`). Installs therefore land on the drive
