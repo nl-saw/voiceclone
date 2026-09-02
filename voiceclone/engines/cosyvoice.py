@@ -519,6 +519,12 @@ def finetune(
             f"Engine '{eng.name}' is not installed. Run: voiceclone install-engine {eng.name}"
         )
     repo = eng.engine_dir / "repo"
+    # Self-heal the repo patches on every training run: finetune() only checks
+    # the install marker (not ensure_installed), so a clone made before a patch
+    # existed would otherwise never get repaired. Both are idempotent and touch
+    # no network.
+    _patch_repo_io(repo, logline)
+    _patch_train_utils_join(repo, logline)
     model_dir = ensure_weights(logline)
     venv_py = str(eng.venv_python())
 
