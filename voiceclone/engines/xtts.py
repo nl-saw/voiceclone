@@ -11,7 +11,9 @@ Supported languages include English ("en") and Dutch ("nl").
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +32,39 @@ _BASE_FILES = {
 }
 
 LICENSE_URL = "https://coqui.ai/page/terms"
+
+# transformers emits two cosmetic log messages around XTTS's GPT2 backbone via
+# logger.warning_once (its own logging setup, NOT Python's warnings module):
+# one when the model is constructed ("...has generative capabilities... will
+# NOT inherit from GenerationMixin") and one on every generate() call because
+# pad token == eos token hides the attention mask. Neither affects our results,
+# so drop them with a targeted logging filter.
+_NOISE_PATTERNS = (
+    re.compile(r"GPT2InferenceModel has generative capabilities"),
+    re.compile(r"The attention mask is not set and cannot be inferred from input"),
+)
+
+
+class _TransformersNoiseFilter(logging.Filter):
+    """Drops the two cosmetic transformers messages above; passes everything else."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not any(p.search(record.getMessage()) for p in _NOISE_PATTERNS)
+
+
+def _silence_transformers_warnings() -> None:
+    """Install the noise filter on the two transformers loggers that emit these
+    messages. Logger names are global to stdlib logging, so this works without
+    importing transformers and survives whatever TTS's import chain does to
+    Python's warnings filters. Idempotent."""
+    for name in ("transformers.modeling_utils", "transformers.generation.utils"):
+        lg = logging.getLogger(name)
+        if not getattr(lg, "_vc_noise_filter", False):  # type: ignore[attr-defined]
+            lg.addFilter(_TransformersNoiseFilter())
+            lg._vc_noise_filter = True  # type: ignore[attr-defined]
+
+
+_silence_transformers_warnings()
 
 
 class LicenseNotAccepted(Exception):
