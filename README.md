@@ -6,8 +6,8 @@ synthesize speech **with sentiment control** (happy / sad / angry / calm / …),
 fully offline after setup.
 
 Multi-engine: ships **XTTS v2** (legacy default), **CosyVoice 3** (Apache-2.0,
-zero-shot + official fine-tune recipe) and **Chatterbox Multilingual V3** (MIT,
-23 languages incl. Dutch). Pick per synthesis or per training run with
+zero-shot + fine-tune recipe) and **Chatterbox Multilingual V3** (MIT,
+23 languages. Pick per synthesis or per training run with
 `--engine`; the default is configurable (`data/settings.json`).
 
 ```
@@ -60,8 +60,6 @@ be fine-tuned with several engines side by side.
   uses Coqui's GPT trainer. Works on CPU, much faster on GPU.
 - **CLI + web UI** — scriptable commands and a local browser app for upload,
   tagging, synthesis and training (with engine selection).
-- **Wide language coverage** — English + Dutch first-class; Chatterbox V3 adds
-  21 more languages zero-shot, CosyVoice 3 covers 9 (no Dutch).
 
 ## Quickstart
 
@@ -116,27 +114,9 @@ uv run voiceclone install-engine chatterbox     # pip chatterbox-tts into a py3.
 # CosyVoice weights (~6 GB) download automatically on first use (or: voiceclone init --download)
 ```
 
-Installs are idempotent — re-running prints "Already installed" after re-checking
-the torch pins and patches (no upstream update check; engine versions are pinned
-on purpose). To force the full install path again (re-apply pins/patches,
-reinstall the pinned package into the existing venv): `uv run voiceclone
-install-engine <name> --force`.
-
-**Disk usage & caches.** Everything the toolkit writes lives under the project's
-`data/` directory — including package caches (`data/cache/uv`, `data/cache/pip`,
-`data/cache/hf`) and temp files (`data/tmp`). Installs therefore land on the drive
-where voiceclone sits, not on your home partition. The caches are shared between
-engines (e.g. torch wheels are stored once) and safe to delete at any time
-(`rm -rf data/cache` — they will be re-downloaded if needed). If you also want
-`uv` itself (outside `voiceclone`) to use the project cache, set
-`export UV_CACHE_DIR=$PWD/data/cache/uv` in your shell.
-
-**Considered, not integrated:** F5-TTS (excellent code, but pretrained weights
-are CC-BY-NC and officially zh/en only), GPT-SoVITS (MIT + strong 1-minute
-few-shot pipeline, but git-clone-only packaging with heavy sys.path hacks and
-no Dutch), Spark-TTS (CC-BY-NC-SA, dormant, no training code), Higgs-Audio-v2
-(archived, ≥24 GB VRAM). Revisit as these projects evolve — the engine
-interface (`voiceclone/engines/base.py`) is designed for exactly this.
+To force the full install again (re-apply pins/patches,
+reinstall the pinned package into the existing venv): 
+`uv run voiceclone install-engine <name> --force`.
 
 Set the default engine in `data/settings.json`: `{"default_engine": "cosyvoice3"}`.
 
