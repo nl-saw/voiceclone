@@ -417,6 +417,46 @@ def _build_split(work: Path, split: str, voice_name: str, ds_dir: Path,
     return n
 
 
+def _patched_train_config(repo: Path, work: Path, epochs: int, accum_grad: int,
+                          lr: float | None, logline) -> Path:
+    """Write a copy of the repo's cosyvoice3.yaml with our train_conf overrides.
+
+    This version of train.py has no CLI config overrides (no --train_conf flag),
+    so per-run settings go through a modified config copy in the run dir — the
+    same flow upstream's fine-tune guide uses. The patch is scoped to the
+    top-level ``train_conf:`` block only (never ``train_conf_gan:``).
+    """
+    src = repo / "examples" / "libritts" / "cosyvoice3" / "conf" / "cosyvoice3.yaml"
+    dst = work / "cosyvoice3.train.yaml"
+    lines = src.read_text(encoding="utf-8").split("\n")
+
+    start = next((i for i, l in enumerate(lines) if re.match(r"^train_conf:\s*$", l)), None)
+    if start is None:
+        raise RuntimeError(f"train_conf section not found in {src} — upstream layout changed?")
+    end = next((j for j in range(start + 1, len(lines)) if re.match(r"^\S", lines[j])), len(lines))
+    block = "\n".join(lines[start:end])
+
+    def sub(pattern: str, repl: str, what: str) -> None:
+        nonlocal block
+        block, n = re.subn(pattern, repl, block, count=1)
+        if n == 0:
+            logline(f"warning: could not set {what} in train_conf — upstream yaml may have changed")
+
+    sub(r"max_epoch:\s*\S+", f"max_epoch: {epochs}", "max_epoch")
+    sub(r"accum_grad:\s*\S+", f"accum_grad: {accum_grad}", "accum_grad")
+    if lr is not None:
+        # YAML 1.1 (PyYAML) only reads a float when the mantissa has a dot —
+        # "4e-06" would parse as a string and break optim.Adam(lr=...).
+        lrs = f"{lr:.6g}"
+        if "e" in lrs and "." not in lrs.split("e")[0]:
+            lrs = lrs.replace("e", ".0e", 1)
+        sub(r"(optim_conf:\s*\n\s*)lr:\s*[\d.eE+-]+", rf"\g<1>lr: {lrs}", "optim_conf.lr")
+
+    dst.write_text("\n".join(lines[:start]) + "\n" + block + "\n" + "\n".join(lines[end:]),
+                   encoding="utf-8")
+    return dst
+
+
 def finetune(
     voice,
     ds: dict,
@@ -483,13 +523,16 @@ def finetune(
 
     cuda_ok = torch.cuda.is_available()
     exp_dir = work / "exp" / "llm" / "torch_ddp"
+    # train.py has no CLI config overrides: bake epochs/accum_grad/lr into a
+    # patched copy of the repo's yaml (see _patched_train_config).
+    cfg = _patched_train_config(repo, work, epochs, max(1, grad_accum_steps), lr, logline)
     cmd = [
         str(eng.engine_dir / "venv" / "bin" / "torchrun"),
         "--nnodes=1", "--nproc_per_node=1",
         "--rdzv_id=1986", "--rdzv_backend=c10d", "--rdzv_endpoint=localhost:29517",
         str(repo / "cosyvoice" / "bin" / "train.py"),
         "--train_engine", "torch_ddp",
-        "--config", str(repo / "examples" / "libritts" / "cosyvoice3" / "conf" / "cosyvoice3.yaml"),
+        "--config", str(cfg),
         "--train_data", str(work / "data" / "train.data.list"),
         "--cv_data", str(work / "data" / "dev.data.list"),
         "--qwen_pretrain_path", str(model_dir / "CosyVoice-BlankEN"),
@@ -500,13 +543,9 @@ def finetune(
         "--tensorboard_dir", str(work / "tensorboard" / "llm"),
         "--ddp.dist_backend", "nccl" if cuda_ok else "gloo",
         "--num_workers", "2", "--prefetch", "100", "--pin_memory",
-        "--train_conf.max_epoch", str(epochs),
-        "--train_conf.accum_grad", str(max(1, grad_accum_steps)),
     ]
     if cuda_ok:
         cmd.append("--use_amp")
-    if lr:
-        cmd += ["--train_conf.optim_conf.lr", str(lr)]
 
     # torchrun's child process only gets the *script's* dir (cosyvoice/bin/) on
     # sys.path, and the repo is not pip-installed into the venv — without this,
