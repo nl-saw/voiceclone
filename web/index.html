@@ -51,6 +51,13 @@
     <div class="chips" id="emotion-chips"></div>
 
     <div class="row">
+      <label>Reference clip (which sample to imitate)
+        <select id="ref-select"><option value="">auto — best match for the emotion above</option></select>
+      </label>
+      <span class="hint">picking a clip overrides the emotion chips</span>
+    </div>
+
+    <div class="row">
       <label>Style (free text, optional)
         <input type="text" id="style" placeholder="e.g. whisper this, very calm and gentle">
       </label>

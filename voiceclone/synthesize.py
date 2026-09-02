@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import audio as A
 from .config import get_settings
-from .emotion import map_style_to_emotion, select_reference
+from .emotion import ReferenceChoice, map_style_to_emotion, select_reference
 from .engines.base import Engine, SynthesisResult
 from .voices import Voice
 
@@ -19,6 +19,7 @@ class SynthesisOutcome:
     requested_emotion: str
     resolved_emotion: str
     output_path: Path | None = None
+    reference_source: str = "auto"  # auto (emotion-based pick) | explicit (user-chosen sample)
 
 
 def synthesize(
@@ -31,6 +32,7 @@ def synthesize(
     output_path: Path | None = None,
     engine_name: str | None = None,  # registry name; None → configured default
     engine: Engine | None = None,  # explicit instance (tests); wins over engine_name
+    reference_sample: str | None = None,  # sample id or filename; skips auto-selection
     temperature: float | None = None,
     length_penalty: float | None = None,
     repetition_penalty: float | None = None,
@@ -42,9 +44,14 @@ def synthesize(
 
     Steps:
       1. Resolve the requested emotion (preset or free-text style → preset).
-      2. Pick the best reference sample for that emotion.
+      2. Pick the reference sample — either the one the user named
+         (``reference_sample``) or, when not given, the best match for the
+         resolved emotion.
       3. Choose zero-shot vs fine-tuned mode.
       4. Run the engine, optionally save the WAV.
+
+    Note: an explicit ``reference_sample`` always wins over the emotion
+    selection — the emotion chips only steer the *automatic* pick.
     """
     text = (text or "").strip()
     if not text:
@@ -59,12 +66,17 @@ def synthesize(
     resolved = requested if requested else "neutral"
 
     # --- reference selection ------------------------------------------------
-    ref = select_reference(
-        [s.to_dict() for s in voice.samples],
-        resolved,
-        get_settings().min_ref_seconds,
-        get_settings().max_ref_seconds,
-    )
+    if reference_sample:
+        ref = resolve_reference(voice, reference_sample)
+        ref_source = "explicit"
+    else:
+        ref = select_reference(
+            [s.to_dict() for s in voice.samples],
+            resolved,
+            get_settings().min_ref_seconds,
+            get_settings().max_ref_seconds,
+        )
+        ref_source = "auto"
     if ref is None:
         raise ValueError(f"Voice '{voice.name}' has no usable reference samples.")
 
@@ -146,6 +158,47 @@ def synthesize(
         requested_emotion=resolved,
         resolved_emotion=ref.emotion,
         output_path=out,
+        reference_source=ref_source,
+    )
+
+
+def resolve_reference(voice: Voice, ref_id: str) -> ReferenceChoice | None:
+    """Resolve a user-named sample (by id like ``s002`` or by filename) to a
+    reference choice. Returns None when the voice has no samples at all."""
+    q = (ref_id or "").strip()
+    if not q:
+        raise ValueError("reference_sample is empty.")
+    if not voice.samples:
+        return None
+
+    s = next((x for x in voice.samples if x.id == q), None)
+    if s is None:  # try by filename (with or without extension, case-insensitive)
+        ql = q.lower()
+        s = next(
+            (x for x in voice.samples
+             if x.file.lower() == ql
+             or Path(x.file).name.lower() == ql
+             or Path(x.file).stem.lower() == ql),
+            None,
+        )
+    if s is None:
+        avail = ", ".join(x.id for x in voice.samples)
+        raise ValueError(
+            f"Sample '{q}' not found in voice '{voice.name}'. Available: {avail}"
+        )
+
+    if not (s.transcript or "").strip():
+        raise ValueError(
+            f"Sample '{s.id}' has no transcript, so it cannot be used as a "
+            f"reference clip. Re-add it (or transcribe) to get one."
+        )
+    return ReferenceChoice(
+        sample_id=s.id,
+        file=s.file,
+        transcript=s.transcript,
+        emotion=(s.emotion or "neutral").lower(),
+        duration_s=float(s.duration_s or 0.0),
+        matched_requested_emotion=False,
     )
 
 

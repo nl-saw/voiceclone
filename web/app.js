@@ -94,6 +94,19 @@ async function loadSamples(name) {
   if (!d.samples.length) {
     tbody.innerHTML = '<tr><td colspan="6" class="hint">No samples yet.</td></tr>';
   }
+  // Reference-clip selector for the synthesize panel (auto + one entry per sample).
+  const refSel = $("#ref-select");
+  if (refSel) {
+    const prev = refSel.value;
+    refSel.innerHTML = '<option value="">auto — best match for the emotion above</option>';
+    for (const s of d.samples) {
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = `${s.id} · ${s.emotion} · ${s.duration_s.toFixed(1)}s`;
+      refSel.appendChild(opt);
+    }
+    if ([...refSel.options].some(o => o.value === prev)) refSel.value = prev;
+  }
 }
 
 $("#samples-table").addEventListener("change", async (e) => {
@@ -214,6 +227,7 @@ $("#gen-btn").addEventListener("click", async () => {
         language: $("#syn-lang").value,
         mode: $("#mode").value,
         engine: $("#synth-engine").value || null,
+        reference_sample: $("#ref-select").value || null,
         ...genParams(),
       }),
     });
@@ -430,7 +444,8 @@ $("#ab-btn").addEventListener("click", async () => {
       body: JSON.stringify({
         voice: activeVoice, text, emotion: selectedEmotion,
         style: $("#style").value || null, language: $("#syn-lang").value, mode,
-        engine: $("#synth-engine").value || null, ...genParams(),
+        engine: $("#synth-engine").value || null,
+        reference_sample: $("#ref-select").value || null, ...genParams(),
       }),
     });
     const blob = await res.blob();

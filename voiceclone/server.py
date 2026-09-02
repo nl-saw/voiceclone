@@ -60,6 +60,7 @@ class SynthesizeRequest(BaseModel):
     language: str | None = "auto"
     mode: str = "auto"  # auto | zero-shot | finetuned
     engine: str | None = None  # TTS engine (None = configured default)
+    reference_sample: str | None = None  # sample id/filename; skips auto-pick by emotion
     # Optional generation overrides (None = model config default).
     temperature: float | None = None
     length_penalty: float | None = None
@@ -233,6 +234,7 @@ def create_app() -> FastAPI:
                 language=None if req.language in (None, "auto") else req.language,
                 engine_mode=req.mode,
                 engine_name=req.engine,
+                reference_sample=req.reference_sample,
                 temperature=req.temperature,
                 length_penalty=req.length_penalty,
                 repetition_penalty=req.repetition_penalty,
@@ -249,6 +251,7 @@ def create_app() -> FastAPI:
             "engine": outcome.result.engine,
             "mode": outcome.result.mode,
             "requested_emotion": outcome.requested_emotion,
+            "reference_mode": outcome.reference_source,  # auto | explicit
             "reference_emotion": outcome.resolved_emotion,
             "reference_file": Path(outcome.result.reference_file).name,
             "duration_s": round(len(outcome.result.wav) / outcome.result.sample_rate, 2),

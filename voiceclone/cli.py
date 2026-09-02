@@ -254,6 +254,7 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
             engine_mode=args.mode,
             engine_name=spec.name,
             output_path=out_path,
+            reference_sample=args.reference,
             temperature=args.temp,
             length_penalty=args.length_penalty,
             repetition_penalty=args.repetition_penalty,
@@ -268,11 +269,16 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
     dt = time.time() - t0
     res = outcome.result
     dur = len(res.wav) / res.sample_rate
+    if outcome.reference_source == "explicit":
+        ref_line = (f"    reference: {Path(res.reference_file).name} "
+                    f"(explicit pick, tagged '{outcome.resolved_emotion}')\n")
+    else:
+        ref_line = (f"    reference: {Path(res.reference_file).name} (tagged '{outcome.resolved_emotion}', "
+                    f"requested '{outcome.requested_emotion}'{'' if outcome.resolved_emotion == outcome.requested_emotion else ' — fell back to closest available'})\n")
     console.print(
         f"[green]✔[/green] {dur:.1f}s of speech in {dt:.1f}s "
         f"({dur / max(dt, 1e-6):.1f}x real-time) — mode={res.mode}, engine={res.engine}\n"
-        f"    reference: {Path(res.reference_file).name} (tagged '{outcome.resolved_emotion}', "
-        f"requested '{outcome.requested_emotion}'{'' if outcome.resolved_emotion == outcome.requested_emotion else ' — fell back to closest available'})\n"
+        f"{ref_line}"
         f"    output: [bold]{outcome.output_path}[/bold]"
     )
     return 0
@@ -478,6 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--voice", required=True)
     sp.add_argument("--emotion", choices=PRESET_EMOTIONS, default=None, help="sentiment preset")
     sp.add_argument("--style", default=None, help="free-text style ('whisper this', 'angry and loud') — mapped to the closest preset")
+    sp.add_argument("--reference", default=None, help="use a specific reference sample (id like 's002' or filename) instead of auto-picking by emotion; overrides --emotion for clip selection")
     sp.add_argument("--lang", default="auto", help="force language ISO code (default: auto-detect from samples; engine validates)")
     sp.add_argument("--mode", choices=["auto", "zero-shot", "finetuned"], default="auto")
     sp.add_argument("--engine", default=None, help="TTS engine to use (default: configured default; see `voiceclone engines`)")

@@ -131,6 +131,10 @@ by the **reference clip**. This toolkit turns that into a practical control:
    (duration sweet-spot 3–15 s, deterministic). If no matching tag exists it
    falls back to your closest available sample — so plain untagged samples
    still work, they just all sound "neutral".
+4. Only one reference clip is used per generation (all engines condition on a
+   single clip for timbre + prosody). To force a specific one instead of the
+   automatic pick: `--reference s002` in the CLI, or the "Reference clip"
+   dropdown in the web UI — an explicit pick overrides the emotion selection.
 
 **Tip:** for reliable sentiment, record/tag a few clips of the person *actually*
 speaking in each emotion you want.
