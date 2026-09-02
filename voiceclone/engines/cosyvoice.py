@@ -131,6 +131,15 @@ def ensure_installed(logline=print) -> None:
 
     # 3. dependencies (idempotent; fast no-op when already satisfied) ----------
     logline("Installing CosyVoice dependencies (torch 2.3.1, transformers 4.51.3, ...) — this takes a while")
+    # deepspeed ships sdist-only on PyPI. Its setup.py probes the CUDA toolkit
+    # (nvcc) whenever torch sees a GPU at *build* time and hard-fails with
+    # MissingCUDAException otherwise — so on a GPU box without the CUDA
+    # toolkit the install breaks. DS_ACCELERATOR=cpu makes setup.py build
+    # deepspeed as pure Python (no compiled ops); that is all we need, since
+    # CosyVoice fine-tuning runs with --train_engine torch_ddp and only uses
+    # deepspeed for its Python-side utilities. Build-time env only — the
+    # worker process never sees it.
+    install_env = {**os.environ, "DS_ACCELERATOR": "cpu"}
     if uv:
         # upstream requirements.txt pulls from official vendor indexes
         # (pytorch cu121, onnxruntime-cuda-12); uv needs the best-match
@@ -144,14 +153,14 @@ def ensure_installed(logline=print) -> None:
             uv, "pip", "install", "--python", str(venv_py),
             "torch==2.3.1", "torchaudio==2.3.1", "numpy==1.26.4",
             "--index-strategy", "unsafe-best-match",
-        ], logline)
+        ], logline, env=install_env)
         _run_streaming([
             uv, "pip", "install", "--python", str(venv_py), "-r", str(reqs),
             "--index-strategy", "unsafe-best-match", "--no-build-isolation",
-        ], logline)
+        ], logline, env=install_env)
     else:
         _run_streaming([str(venv_py), "-m", "pip", "install", "-U", "pip"], logline)
-        _run_streaming([str(venv_py), "-m", "pip", "install", "-r", str(reqs)], logline)
+        _run_streaming([str(venv_py), "-m", "pip", "install", "-r", str(reqs)], logline, env=install_env)
 
     (engine_dir / "installed.json").write_text(json.dumps({
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
