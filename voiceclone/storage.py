@@ -105,6 +105,8 @@ def _run_roots_for_voice(voice_name: str, settings: Settings) -> list[tuple[str,
 
 def list_runs(voice_name: str, settings: Settings | None = None) -> dict:
     """All fine-tune run dirs for one voice (all engines), with sizes + registration."""
+    from .engines import REGISTRY
+
     settings = settings or get_settings()
     v = load_voice(voice_name)  # raises VoiceError if unknown
     registered_by_engine = {
