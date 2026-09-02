@@ -72,7 +72,8 @@ def main() -> None:
                 finetuned = cmd.get("finetuned_checkpoint") or None
                 m = get_model(finetuned)
 
-                import torchaudio
+                import numpy as np
+                import soundfile as sf
 
                 prompt_text = (cmd.get("reference_text") or "").strip()
                 # Fun-CosyVoice3 requires the instruct prefix on the prompt text.
@@ -86,8 +87,14 @@ def main() -> None:
                     chunks.append(chunk["tts_speech"])  # (1, N) tensor
                 wav = chunks[0] if len(chunks) == 1 else __import__("torch").cat(chunks, dim=-1)
 
+                # soundfile (not torchaudio.save): torchaudio >= 2.9 routes its
+                # native I/O through torchcodec, which needs a system FFmpeg of
+                # a matching major version — too fragile for "any machine".
                 out_path = Path(engine_dir / "tmp" / f"out_{int(time.time() * 1000)}.wav")
-                torchaudio.save(str(out_path), wav, m.sample_rate)
+                wav_np = wav.detach().cpu().numpy()
+                if wav_np.ndim > 1:
+                    wav_np = wav_np[0]
+                sf.write(str(out_path), np.ascontiguousarray(wav_np, dtype=np.float32), int(m.sample_rate), subtype="PCM_16")
                 send({
                     "ok": True,
                     "wav_path": str(out_path),

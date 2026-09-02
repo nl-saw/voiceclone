@@ -6,7 +6,8 @@
   in this toolkit. Emotion is expressed through Chatterbox's "exaggeration"
   intensity dial (see workers/chatterbox_worker.py for the mapping).
 * No official fine-tuning recipe yet, so ``finetune=False`` for now.
-* Runs in a dedicated venv (upstream pins torch==2.6.0, transformers==5.2.0) that
+* Runs in a dedicated venv (upstream pins torch==2.6.0, transformers==5.2.0;
+  we upgrade torch to 2.9.1 post-install for Blackwell/RTX-50xx support) that
   conflicts with the toolkit's own dependencies → external-engine worker protocol.
 * Outputs carry Resemble's imperceptible PerTh neural watermark.
 
@@ -31,6 +32,15 @@ from .external import ExternalEngine, ExternalEngineError
 GIT_REF = "5de7a54aa4e5"  # master @ 2026-07-21 (V3 + single-language pack)
 PIP_PACKAGE = f"chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git@{GIT_REF}"
 PYTHON_VERSION = "3.10"  # upstream supports 3.10+
+
+# Upstream pins torch==2.6.0 for Python < 3.14, but that build predates NVIDIA
+# Blackwell (sm_120): on RTX 50xx, inference dies with
+# "CUDA error: no kernel image is available for execution on the device".
+# Upstream itself declares torch>=2.9.0 fine (that is what its Python >= 3.14
+# branch installs), so we upgrade after installing the package; torchaudio must
+# track torch's version. Bump these together when upgrading further.
+TORCH_PIN = "torch==2.9.1"
+TORCHAUDIO_PIN = "torchaudio==2.9.1"
 
 
 class ChatterboxEngine(ExternalEngine):
@@ -68,6 +78,24 @@ def _run_streaming(cmd: list[str], logline, cwd: str | None = None) -> None:
         )
 
 
+def _ensure_torch(eng: ChatterboxEngine, logline) -> None:
+    """Upgrade torch/torchaudio past the upstream 2.6.0 pin (Blackwell fix).
+
+    Idempotent — a fast no-op when the pins are already satisfied; also repairs
+    venvs installed before this step existed.
+    """
+    venv_py = eng.venv_python()
+    if not venv_py.exists():
+        return
+    uv = shutil.which("uv")
+    cmd = (
+        [uv, "pip", "install", "--python", str(venv_py)] if uv
+        else [str(venv_py), "-m", "pip", "install"]
+    )
+    logline(f"Ensuring {TORCH_PIN.split('==')[0]} >= 2.9 for Blackwell GPUs (upstream pins 2.6.0) ...")
+    _run_streaming(cmd + [TORCH_PIN, TORCHAUDIO_PIN], logline)
+
+
 def ensure_installed(logline=print) -> None:
     """Create the dedicated venv and install ``chatterbox-tts``.
 
@@ -78,6 +106,7 @@ def ensure_installed(logline=print) -> None:
     engine_dir = eng.engine_dir
     engine_dir.mkdir(parents=True, exist_ok=True)
     if (engine_dir / "installed.json").exists():
+        _ensure_torch(eng, logline)  # repairs venvs from before the fix
         logline("Already installed.")
         return
 
@@ -97,13 +126,16 @@ def ensure_installed(logline=print) -> None:
             logline(f"Creating venv with {py} ...")
             _run_streaming([py, "-m", "venv", str(engine_dir / "venv")], logline)
 
-    # dependencies (idempotent; fast no-op when already satisfied)
-    logline(f"Installing {PIP_PACKAGE} (torch 2.6.0 pinned by upstream) — this takes a while")
+    # dependencies (idempotent; fast no-op when already satisfied). Upstream's
+    # torch==2.6.0 pin comes in here and is replaced by _ensure_torch below.
+    logline(f"Installing {PIP_PACKAGE} — this takes a while")
     if uv:
         _run_streaming([uv, "pip", "install", "--python", str(venv_py), PIP_PACKAGE], logline)
     else:
         _run_streaming([str(venv_py), "-m", "pip", "install", "-U", "pip"], logline)
         _run_streaming([str(venv_py), "-m", "pip", "install", PIP_PACKAGE], logline)
+
+    _ensure_torch(eng, logline)
 
     (engine_dir / "installed.json").write_text(json.dumps({
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

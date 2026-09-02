@@ -4,8 +4,9 @@
   (repo: https://github.com/FunAudioLLM/CosyVoice, model: Fun-CosyVoice3-0.5B-2512).
 * 9 languages for zero-shot cloning: zh/en/ja/ko/de/es/fr/it/ru — **no Dutch**.
 * Runs in a dedicated venv (upstream hard-pins torch==2.3.1, transformers==4.51.3,
-  Python 3.10) that conflicts with the toolkit's own dependencies, so it is driven
-  through the external-engine worker protocol (see voiceclone/engines/external.py).
+  Python 3.10; we install a Blackwell-capable torch 2.9.1+cu128 instead) that
+  conflicts with the toolkit's own dependencies, so it is driven through the
+  external-engine worker protocol (see voiceclone/engines/external.py).
 
 Install:   voiceclone install-engine cosyvoice3
 Fine-tune: voiceclone train <voice> --engine cosyvoice3
@@ -18,6 +19,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -83,6 +85,128 @@ def _run_streaming(cmd: list[str], logline, cwd: str | None = None, env: dict | 
         )
 
 
+# Upstream pins torch==2.3.1 (cu121), which predates NVIDIA Blackwell (sm_120):
+# on RTX 50xx, inference dies with "CUDA error: no kernel image is available
+# for execution on the device". We install a cu128 build instead (see
+# _filtered_requirements). torchaudio must track torch. NOTE: torchaudio >= 2.9
+# routes its native load/save through torchcodec, which needs a system FFmpeg
+# of a matching major version — too fragile for "any machine", so the repo's
+# two I/O call sites are patched to soundfile instead (_patch_repo_io).
+# Verified end-to-end on CPU before shipping. Bump these together when
+# upgrading further.
+TORCH_PIN = "torch==2.9.1"
+TORCHAUDIO_PIN = "torchaudio==2.9.1"
+
+
+def _ensure_torch(eng: CosyVoice3Engine, logline) -> None:
+    """Upgrade torch/torchaudio past the upstream 2.3.1 pin (Blackwell fix).
+
+    Idempotent — a fast no-op when the pins are already satisfied; also repairs
+    venvs installed before this step existed.
+    """
+    venv_py = eng.venv_python()
+    if not venv_py.exists():
+        return
+    uv = shutil.which("uv")
+    cmd = (
+        [uv, "pip", "install", "--python", str(venv_py)] if uv
+        else [str(venv_py), "-m", "pip", "install"]
+    )
+    logline(f"Ensuring torch >= 2.9 for Blackwell GPUs (upstream pins 2.3.1) ...")
+    _run_streaming(cmd + [TORCH_PIN, TORCHAUDIO_PIN], logline)
+
+
+def _patch_deepspeed_compat(eng: CosyVoice3Engine, logline) -> None:
+    """Make ``import deepspeed`` survive GPU boxes without a CUDA toolkit.
+
+    The sdist build generates ``deepspeed/git_version_info.py``, which calls
+    ``builder.is_compatible()`` for every op at import time. On a machine where
+    torch sees a GPU but nvcc is missing, that raises MissingCUDAException —
+    and transformers (which imports deepspeed whenever it is installed) becomes
+    unimportable, killing CosyVoice inference. Wrap the probe so unavailable
+    ops are simply reported as incompatible; CosyVoice trains with torch_ddp
+    and never needs compiled deepspeed ops. Idempotent; also repairs venvs
+    installed before this fix existed.
+    """
+    candidates = sorted((eng.engine_dir / "venv" / "lib").glob("python*/site-packages/deepspeed/git_version_info.py"))
+    if not candidates:
+        logline("deepspeed git_version_info.py not found — skipping compat patch")
+        return
+    f = candidates[0]
+    src = f.read_text()
+    old = (
+        "for op_name, builder in ALL_OPS.items():\n"
+        "    op_compatible = builder.is_compatible()\n"
+        "    compatible_ops[op_name] = op_compatible\n"
+    )
+    new = (
+        "for op_name, builder in ALL_OPS.items():\n"
+        "    try:\n"
+        "        op_compatible = builder.is_compatible()\n"
+        "    except Exception:\n"
+        "        # no CUDA toolkit / unsupported device: report the op as\n"
+        "        # unavailable instead of failing 'import deepspeed'\n"
+        "        op_compatible = False\n"
+        "    compatible_ops[op_name] = op_compatible\n"
+    )
+    if old in src:
+        f.write_text(src.replace(old, new))
+        logline("Patched deepspeed import-time CUDA probe (git_version_info.py)")
+
+
+def _patch_repo_io(repo: Path, logline) -> None:
+    """Replace torchaudio file I/O in the cloned repo with soundfile.
+
+    torchaudio >= 2.9 routes load/save through torchcodec, which needs a
+    system FFmpeg of a matching major version — too fragile for "any machine"
+    (and we only ever handle WAV). soundfile is already a hard dependency of
+    the venv (via librosa) and needs no system libraries. Two call sites:
+    reference-audio loading (inference) and dataset loading (fine-tuning).
+    Idempotent; warns if upstream changed the lines.
+    """
+    patches = [
+        ("cosyvoice/utils/file_utils.py",
+         "def load_wav(wav, target_sr, min_sr=16000):\n"
+         "    speech, sample_rate = torchaudio.load(wav, backend='soundfile')\n",
+         "def load_wav(wav, target_sr, min_sr=16000):\n"
+         "    import soundfile as _sf\n"
+         "    import torch as _torch\n"
+         "    _data, sample_rate = _sf.read(wav, dtype='float32', always_2d=True)\n"
+         "    speech = _torch.from_numpy(_data).t().contiguous()  # channels-first, like torchaudio.load\n"),
+        ("cosyvoice/dataset/processor.py",
+         "        sample['speech'], sample['sample_rate'] = torchaudio.load(BytesIO(sample['audio_data']))\n",
+         "        import soundfile as _sf\n"
+         "        _data, _sr = _sf.read(BytesIO(sample['audio_data']), dtype='float32', always_2d=True)\n"
+         "        sample['speech'] = torch.from_numpy(_data).t().contiguous()  # channels-first, like torchaudio.load\n"
+         "        sample['sample_rate'] = _sr\n"),
+    ]
+    for rel, old, new in patches:
+        f = repo / rel
+        if not f.exists():
+            logline(f"warning: {rel} not found — skipping I/O patch")
+            continue
+        src = f.read_text()
+        if old in src:
+            f.write_text(src.replace(old, new))
+            logline(f"Patched torchaudio I/O -> soundfile ({rel})")
+        elif "soundfile" not in src:
+            logline(f"warning: expected pattern missing in {rel} — upstream may have changed; "
+                    "torchaudio I/O would need torchcodec (system FFmpeg)")
+
+
+def _filtered_requirements(reqs: Path, engine_dir: Path) -> Path:
+    """requirements.txt minus the torch/torchaudio pins.
+
+    We install a newer Blackwell-capable torch build ourselves (see
+    TORCH_PIN); keeping upstream's torch==2.3.1 pin in the same resolution
+    would force a downgrade (and double-download ~6 GB of CUDA libraries).
+    """
+    out = engine_dir / "requirements.filtered.txt"
+    kept = [l for l in reqs.read_text().splitlines() if not re.match(r"^\s*(torch|torchaudio)==", l)]
+    out.write_text("\n".join(kept) + "\n")
+    return out
+
+
 def ensure_installed(logline=print) -> None:
     """Clone the repo, create the dedicated venv, install dependencies.
 
@@ -93,6 +217,9 @@ def ensure_installed(logline=print) -> None:
     engine_dir = eng.engine_dir
     engine_dir.mkdir(parents=True, exist_ok=True)
     if (engine_dir / "installed.json").exists():
+        _ensure_torch(eng, logline)  # repairs venvs from before the fix
+        _patch_repo_io(engine_dir / "repo", logline)  # same
+        _patch_deepspeed_compat(eng, logline)  # same
         logline("Already installed.")
         return
 
@@ -106,6 +233,7 @@ def ensure_installed(logline=print) -> None:
     elif not (repo / "third_party" / "Matcha-TTS").exists():
         logline("Updating git submodules (Matcha-TTS) ...")
         _run_streaming(["git", "-C", str(repo), "submodule", "update", "--init", "--recursive"], logline)
+    _patch_repo_io(repo, logline)
 
     # 2. venv -----------------------------------------------------------------
     venv_py = eng.venv_python()
@@ -130,7 +258,7 @@ def ensure_installed(logline=print) -> None:
             _run_streaming([py, "-m", "venv", str(engine_dir / "venv")], logline)
 
     # 3. dependencies (idempotent; fast no-op when already satisfied) ----------
-    logline("Installing CosyVoice dependencies (torch 2.3.1, transformers 4.51.3, ...) — this takes a while")
+    logline(f"Installing CosyVoice dependencies ({TORCH_PIN.split('==')[0]}, transformers 4.51.3, ...) — this takes a while")
     # deepspeed ships sdist-only on PyPI. Its setup.py probes the CUDA toolkit
     # (nvcc) whenever torch sees a GPU at *build* time and hard-fails with
     # MissingCUDAException otherwise — so on a GPU box without the CUDA
@@ -154,19 +282,27 @@ def ensure_installed(logline=print) -> None:
         # the real wheel from pypi.nvidia.com at build time (~4 GB for
         # tensorrt-cu12-libs). With --no-build-isolation that backend must be
         # importable from the venv itself, so it is pre-installed here.
+        # torch/torchaudio come from our own pins (Blackwell-capable cu128
+        # build), so resolve the rest of requirements.txt without them.
+        filtered = _filtered_requirements(reqs, engine_dir)
         _run_streaming([uv, "pip", "install", "--python", str(venv_py), "setuptools<81", "wheel", "wheel-stub"], logline)
         _run_streaming([
             uv, "pip", "install", "--python", str(venv_py),
-            "torch==2.3.1", "torchaudio==2.3.1", "numpy==1.26.4",
+            TORCH_PIN, TORCHAUDIO_PIN, "numpy==1.26.4",
             "--index-strategy", "unsafe-best-match",
         ], logline, env=install_env)
         _run_streaming([
-            uv, "pip", "install", "--python", str(venv_py), "-r", str(reqs),
+            uv, "pip", "install", "--python", str(venv_py), "-r", str(filtered),
             "--index-strategy", "unsafe-best-match", "--no-build-isolation",
         ], logline, env=install_env)
     else:
         _run_streaming([str(venv_py), "-m", "pip", "install", "-U", "pip"], logline)
-        _run_streaming([str(venv_py), "-m", "pip", "install", "-r", str(reqs)], logline, env=install_env)
+        filtered = _filtered_requirements(reqs, engine_dir)
+        _run_streaming([str(venv_py), "-m", "pip", "install", "-r", str(filtered),
+                        TORCH_PIN, TORCHAUDIO_PIN], logline, env=install_env)
+
+    _ensure_torch(eng, logline)  # no-op on fresh installs; keeps the pins authoritative
+    _patch_deepspeed_compat(eng, logline)
 
     (engine_dir / "installed.json").write_text(json.dumps({
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

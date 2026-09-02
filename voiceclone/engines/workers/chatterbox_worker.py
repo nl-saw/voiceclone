@@ -65,7 +65,8 @@ def main() -> None:
             elif op == "synthesize":
                 t0 = time.time()
                 m = get_model()
-                import torchaudio
+                import numpy as np
+                import soundfile as sf
 
                 lang = (cmd.get("language") or "en").lower()
                 emotion = (cmd.get("emotion") or "neutral").lower()
@@ -75,8 +76,14 @@ def main() -> None:
                     audio_prompt_path=cmd.get("reference_wav_path"),
                     exaggeration=EMOTION_EXAGGERATION.get(emotion, 0.5),
                 )
+                # soundfile (not torchaudio.save): torchaudio >= 2.9 routes its
+                # native I/O through torchcodec, which we do not install;
+                # soundfile is already a hard dependency of librosa/pyloudnorm.
+                wav_np = wav.detach().cpu().numpy()
+                if wav_np.ndim > 1:
+                    wav_np = wav_np[0]
                 out_path = Path(engine_dir / "tmp" / f"out_{int(time.time() * 1000)}.wav")
-                torchaudio.save(str(out_path), wav.detach().cpu(), m.sr)
+                sf.write(str(out_path), np.ascontiguousarray(wav_np, dtype=np.float32), int(m.sr), subtype="PCM_16")
                 send({
                     "ok": True,
                     "wav_path": str(out_path),
