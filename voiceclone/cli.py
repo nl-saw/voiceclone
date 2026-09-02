@@ -534,6 +534,11 @@ def _pin_caches_to_project() -> None:
         tmp = s.data_dir / "tmp"
         tmp.mkdir(parents=True, exist_ok=True)
         os.environ["TMPDIR"] = str(tmp)
+    # See installer_env(): quiet uv's hardlink warning on filesystems that can't.
+    if not os.environ.get("UV_LINK_MODE"):
+        from .engines.external import _hardlinks_supported
+        if not _hardlinks_supported(s.data_dir):
+            os.environ["UV_LINK_MODE"] = "copy"
 
 
 def main(argv: list[str] | None = None) -> int:

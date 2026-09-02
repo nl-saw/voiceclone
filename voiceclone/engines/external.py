@@ -57,7 +57,8 @@ def installer_env() -> dict[str, str]:
     on a machine with a small home partition or a different drive that is not the
     project's, installs die mid-way with "no space left". Redirect everything under
     ``data/cache`` (shared across engines, so e.g. torch wheels are cached once) and
-    temp files to ``data/tmp``. Values already set by the user take precedence.
+    temp files to ``data/tmp``. Also defaults ``UV_LINK_MODE=copy`` on filesystems
+    without hardlink support. Values already set by the user take precedence.
     """
     s = get_settings()
     env = os.environ.copy()
@@ -73,7 +74,28 @@ def installer_env() -> dict[str, str]:
         tmp = s.data_dir / "tmp"
         tmp.mkdir(parents=True, exist_ok=True)
         env["TMPDIR"] = str(tmp)
+    # On filesystems without hardlink support (NFS/SMB/CIFS shares, some overlays)
+    # uv warns "Failed to hardlink files; falling back to full copy" for every
+    # install. Probe the project drive once; if hardlinks are impossible there,
+    # tell uv up front so it copies quietly instead of warning each time.
+    if not os.environ.get("UV_LINK_MODE") and not _hardlinks_supported(s.data_dir):
+        env["UV_LINK_MODE"] = "copy"
     return env
+
+
+def _hardlinks_supported(d: Path) -> bool:
+    """Whether the filesystem holding *d* supports hardlinks (uv's fast install path)."""
+    a, b = d / ".hl-probe-a", d / ".hl-probe-b"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        a.write_bytes(b"x")
+        os.link(str(a), str(b))
+        return True
+    except OSError:
+        return False
+    finally:
+        for p in (a, b):
+            p.unlink(missing_ok=True)
 
 
 class ExternalEngine(Engine):
