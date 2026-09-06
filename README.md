@@ -260,6 +260,6 @@ just slows down, and rerunning the command above restores the GPU.
 - [ ] Speaker-consistency warnings in the UI (ECAPA embeddings, module exists)
 - [ ] Chatterbox fine-tune support when an official recipe appears (community
       HF-Trainer recipes exist today)
-- [ ] Re-evaluate GPT-SoVITS / F5-TTS integration (see "Considered" above)
+- [ ] Re-evaluate GPT-SoVITS / F5-TTS integration
 - [ ] Batch synthesis (script → multiple wavs), streaming API
 - [ ] Voice quality scoring (SNR, clipping, length distribution) on upload
