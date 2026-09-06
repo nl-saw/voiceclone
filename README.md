@@ -152,6 +152,9 @@ intensity dial — `neutral`≈0.5, `calm`≈0.35, `happy/excited/angry`≈0.7�
   get one dataset per language. Samples added before timestamps were stored fall
   back to approximate word-count cuts — run `voiceclone retranscribe <voice>`
   (one-off per sample, ~10× realtime on CPU) to backfill them for exactly-aligned clips.
+  Transcription runs on the GPU automatically when ctranslate2 was built with CUDA
+  support (the PyPI wheels are CPU-only; a one-time source build against a CUDA
+  toolkit enables it — see `get_whisper` in `transcribe.py`); otherwise CPU int8.
 - **`--engine cosyvoice3`** runs FunAudioLLM's official CosyVoice 3 recipe
   headlessly: Kaldi-style data → parquet → `torchrun train.py` on the LLM
   component (where speaker identity lives) → averaged best checkpoint → an

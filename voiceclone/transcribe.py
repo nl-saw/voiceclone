@@ -21,20 +21,30 @@ _model_cache: dict[str, object] = {}
 def get_whisper(model_size: str = "small", device: str = "auto"):
     """Lazily load (and cache) a faster-whisper model.
 
-    Transcription runs on **CPU int8** by default (``"auto"`` → CPU). CTranslate2's
-    GPU path needs the *system* cuBLAS 12, which is absent when CUDA comes from
-    pip wheels — torch's CUDA-13 build bundles ``libcublas.so.13``, not ``.so.12`` —
-    so guessing at CUDA (as we used to) failed at first inference with
-    ``Library libcublas.so.12 is not found or cannot be loaded``. CPU int8 runs
-    ~10x real-time, which is plenty for a one-off transcription step and can't be
-    broken by ``uv sync`` (it's code, not an env/lib dependency).
+    ``"auto"`` (the default) uses the **GPU** when this ctranslate2 build has one
+    available — i.e. it was built from source against a CUDA toolkit (the PyPI
+    wheels are CPU-only, and there is no prebuilt NVIDIA wheel) — and falls back
+    to **CPU int8** otherwise. The check is ``ctranslate2.get_cuda_device_count()``
+    on the *installed* build, so a plain pip/uv environment can never guess at CUDA
+    and fail with ``Library libcublas.so.12 is not found`` (the failure mode that
+    made us hard-code CPU before).
 
-    Pass ``device="cuda"`` to force the GPU path; it fails loudly if your
-    CTranslate2 build can't load cuBLAS.
+    GPU runs use float16: ctranslate2 disables INT8 on Blackwell (sm_120), and
+    fp16 is the faster-whisper-recommended precision there anyway. CPU int8 runs
+    ~10x real-time, which is fine for a one-off transcription step; on an RTX 5090
+    the GPU path is several times faster still (and speeds up every add-sample too).
+
+    Pass ``device="cuda"`` to force the GPU path (fails loudly if this ctranslate2
+    build has no CUDA) or ``device="cpu"`` to force CPU.
     """
     if model_size in _model_cache:
         return _model_cache[model_size]
     from faster_whisper import WhisperModel
+
+    if device == "auto":
+        import ctranslate2
+
+        device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
 
     if device == "cuda":
         model = WhisperModel(model_size, device="cuda", compute_type="float16")
