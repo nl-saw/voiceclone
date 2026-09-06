@@ -630,5 +630,18 @@ def finetune(
         else:
             os.symlink(entry, mdir / entry.name)
 
+    # 6. drop the raw per-epoch checkpoints — llm.pt is their average ----------
+    # The trainer saves one ~5 GiB epoch_<n>_whole.pt per epoch; after averaging
+    # they are never read again (model_dir hardlinks llm.pt, so it survives).
+    freed = 0
+    for f in sorted(exp_dir.glob("epoch_*.pt")):
+        try:
+            freed += f.stat().st_size
+            f.unlink()
+        except OSError:
+            pass
+    if freed:
+        logline(f"Removed {freed / 2**30:.1f} GiB of per-epoch checkpoints (kept averaged llm.pt)")
+
     report.checkpoint = str(mdir)
     logline(f"Done. Inference model dir: {mdir}")

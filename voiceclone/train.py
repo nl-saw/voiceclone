@@ -600,6 +600,26 @@ def _run_finetune_xtts(
         if ckpt is None:
             raise RuntimeError(f"Trainer finished but no checkpoint found under {run_training}")
         report.checkpoint = str(ckpt)
+
+        # ---- post-training cleanup ------------------------------------------
+        # The trainer leaves ~5 GiB of redundancy in the run dir: best_model.pth
+        # is an exact copy of the newest best_model_<step>.pth (its "shortcut"),
+        # and checkpoint_*.pth are periodic snapshots superseded by the final
+        # model. Only best models (selectable in the web UI) and the registered
+        # checkpoint are ever used again — drop everything else right away.
+        freed = 0
+        for f in sorted(run_training.glob("*.pth")):
+            if f.resolve() == ckpt.resolve():
+                continue
+            if re.match(r"best_model_\d+\.pth$", f.name):
+                continue  # other best models stay selectable in the web UI
+            try:
+                freed += f.stat().st_size
+                f.unlink()
+            except OSError:
+                pass
+        if freed:
+            logline(f"Removed {freed / 2**30:.1f} GiB of superseded checkpoints (kept {ckpt.name})")
         logline(f"Done. Checkpoint: {ckpt}")
         return report
 
