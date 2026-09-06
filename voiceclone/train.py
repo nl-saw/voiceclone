@@ -49,6 +49,13 @@ class TrainReport:
     error: str | None = None
 
 
+# Padding around timestamp-aligned cuts: Whisper word starts can clip the very
+# onset of a word, and word ends tend to run slightly short of the real audio
+# tail. A little silence on each side is harmless for training.
+LEAD_PAD_S = 0.1
+TAIL_PAD_S = 0.2
+
+
 def prepare_dataset(voice: Voice, out_dir: Path) -> dict:
     """Build the training dataset directory from registered samples.
 
@@ -56,9 +63,13 @@ def prepare_dataset(voice: Voice, out_dir: Path) -> dict:
       <out>/wavs/<id>_<sentence>.wav
       <out>/metadata_train.csv   (pipe-delimited: audio_file|text|speaker_name)
       <out>/metadata_eval.csv
+
+    Clips are cut from the sample's stored word timestamps when available
+    (exactly aligned); samples without them fall back to approximate
+    word-count-proportional slicing.
     """
     from . import audio as A
-    from .transcribe import split_sentences
+    from .transcribe import split_sentences, split_words
 
     out_dir.mkdir(parents=True, exist_ok=True)
     wavs_dir = out_dir / "wavs"
@@ -67,6 +78,7 @@ def prepare_dataset(voice: Voice, out_dir: Path) -> dict:
     wavs_dir.mkdir()
 
     rows: list[dict] = []
+    n_no_timestamps = 0
     for s in voice.samples:
         text = (s.transcript or "").strip()
         if not text:
@@ -76,19 +88,34 @@ def prepare_dataset(voice: Voice, out_dir: Path) -> dict:
             continue
         sr = get_settings().sample_rate
         wav = A.load_audio(str(wav_path), sr)
-        sentences = split_sentences(text)
-        if not sentences:
-            sentences = [text]
 
-        # Proportionally slice the audio across sentences by word count.
-        total_words = max(1, sum(len(x.split()) for x in sentences))
-        pos = 0
-        for i, sent in enumerate(sentences):
-            frac = len(sent.split()) / total_words
-            start = int(pos * len(wav))
-            end = int((pos + frac) * len(wav)) if i < len(sentences) - 1 else len(wav)
-            pos += frac
-            clip = wav[start:end]
+        # (chunk_text, start_sample, end_sample) spans for this sample.
+        word_list = [[w[0], float(w[1]), float(w[2])] for w in (s.words or [])]
+        if len(word_list) >= 3:
+            chunks = split_words([w[0] for w in word_list])
+            spans = [
+                (c.text.strip(), int(max(0.0, word_list[c.start_idx][1] - LEAD_PAD_S) * sr),
+                 int(min(len(wav) / sr, word_list[c.end_idx][2] + TAIL_PAD_S) * sr))
+                for c in chunks if c.text.strip()
+            ]
+        else:
+            n_no_timestamps += 1
+            sentences = split_sentences(text)
+            if not sentences:
+                sentences = [text]
+            # Fallback (no word timestamps): proportionally slice by word count.
+            total_words = max(1, sum(len(x.split()) for x in sentences))
+            pos = 0
+            spans = []
+            for i, sent in enumerate(sentences):
+                frac = len(sent.split()) / total_words
+                start = int(pos * len(wav))
+                end = int((pos + frac) * len(wav)) if i < len(sentences) - 1 else len(wav)
+                pos += frac
+                spans.append((sent.strip(), start, end))
+
+        for i, (sent, a, b) in enumerate(spans):
+            clip = wav[a:b]
             if len(clip) < sr // 3:  # skip sub-0.33 s slivers
                 continue
             name = f"{s.id}_{i:04d}.wav"
@@ -129,6 +156,7 @@ def prepare_dataset(voice: Voice, out_dir: Path) -> dict:
         "n_train": len(train_rows),
         "n_eval": len(eval_rows),
         "languages": langs,
+        "n_no_timestamps": n_no_timestamps,
     }
 
 
@@ -278,6 +306,11 @@ def run_finetune(
         report.languages = ds["languages"]
         report.output_dir = ds["out_dir"]
         logline(f"Dataset ready: {ds['n_train']} train / {ds['n_eval']} eval sentences, languages={ds['languages']}")
+        if ds.get("n_no_timestamps"):
+            logline(
+                f"Note: {ds['n_no_timestamps']} sample(s) have no word timestamps — approximate cuts used for them. "
+                f"Run `voiceclone retranscribe {voice.name}` to backfill."
+            )
 
         import torch
 
@@ -375,6 +408,11 @@ def _run_finetune_xtts(
         report.languages = ds["languages"]
         report.output_dir = ds["out_dir"]
         logline(f"Dataset ready: {ds['n_train']} train / {ds['n_eval']} eval sentences, languages={ds['languages']}")
+        if ds.get("n_no_timestamps"):
+            logline(
+                f"Note: {ds['n_no_timestamps']} sample(s) have no word timestamps — approximate cuts used for them. "
+                f"Run `voiceclone retranscribe {voice.name}` to backfill."
+            )
 
         # ---- precision selection -------------------------------------------
         # bf16 mixed precision on CUDA (master weights/optimizer stay fp32):

@@ -47,6 +47,11 @@ class Sample:
     duration_s: float = 0.0
     added_at: str = field(default_factory=_now)
     note: str = ""
+    # Word-level timestamps [[word, start_s, end_s], ...] on this sample's audio
+    # timeline, captured at add time (faster-whisper). Used to cut exactly-aligned
+    # sentence clips for fine-tuning. Empty for samples added before this field
+    # existed — run `voiceclone retranscribe <voice>` to backfill.
+    words: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +63,7 @@ class Sample:
             "duration_s": self.duration_s,
             "added_at": self.added_at,
             "note": self.note,
+            "words": self.words,
         }
 
     @classmethod
@@ -65,6 +71,7 @@ class Sample:
         return cls(**{k: d.get(k, v) for k, v in {
             "id": "", "file": "", "transcript": "", "language": "en",
             "emotion": "neutral", "duration_s": 0.0, "added_at": _now(), "note": "",
+            "words": [],
         }.items() if k in d})
 
 
@@ -176,6 +183,8 @@ def add_samples(
     Each file is decoded to 24 kHz mono, trimmed, normalized, stored under
     ``samples/``, and transcribed (``transcriber`` is a callable
     ``wav, sr -> (text, lang)``; when None the default faster-whisper is used).
+    With the default transcriber, per-word timestamps are captured too and
+    stored on the sample — fine-tuning uses them to cut exactly-aligned clips.
 
     Returns (voice, per-file reports).
     """
@@ -211,8 +220,9 @@ def add_samples(
                 reports.append({"file": str(f), "ok": False, "error": f"too short after trimming ({dur:.1f}s)"})
                 continue
 
-            # Transcribe
+            # Transcribe (word timestamps stored for aligned training clips)
             text, lang = "", language or ""
+            words: list = []
             if transcriber is not None:
                 text, lang = transcriber(wav, get_settings().sample_rate)
             else:
@@ -221,6 +231,7 @@ def add_samples(
                 model_size = whisper_model or get_settings().whisper_model
                 t = transcribe_wav(wav, get_settings().sample_rate, language=language, model_size=model_size)
                 text, lang = t.text, t.language
+                words = [[w, s_, e_] for w, s_, e_ in t.words]
             if not lang:
                 lang = "en"
 
@@ -228,7 +239,7 @@ def add_samples(
 
             v.samples.append(Sample(
                 id=sid, file=out_rel, transcript=text, language=lang,
-                emotion=emotion, duration_s=round(dur, 2), note=note,
+                emotion=emotion, duration_s=round(dur, 2), note=note, words=words,
             ))
             reports.append({
                 "file": str(f), "ok": True, "sample_id": sid,

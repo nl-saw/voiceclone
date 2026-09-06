@@ -145,9 +145,13 @@ intensity dial — `neutral`≈0.5, `calm`≈0.35, `happy/excited/angry`≈0.7�
 
 ## Fine-tuning notes
 
-- **Shared dataset prep** (all engines): samples are split into sentence-level
-  clips (Whisper word timestamps) and written as `wavs/ + metadata_train.csv /
-  metadata_eval.csv`. Bilingual voices get one dataset per language.
+- **Shared dataset prep** (all engines): each sample is transcribed with
+  faster-whisper *including word-level timestamps* at `add-sample` time; training
+  clips are then cut from those exact word spans (sentence-like chunks, ≤240 chars)
+  and written as `wavs/ + metadata_train.csv / metadata_eval.csv`. Bilingual voices
+  get one dataset per language. Samples added before timestamps were stored fall
+  back to approximate word-count cuts — run `voiceclone retranscribe <voice>`
+  (one-off per sample, ~10× realtime on CPU) to backfill them for exactly-aligned clips.
 - **`--engine cosyvoice3`** runs FunAudioLLM's official CosyVoice 3 recipe
   headlessly: Kaldi-style data → parquet → `torchrun train.py` on the LLM
   component (where speaker identity lives) → averaged best checkpoint → an

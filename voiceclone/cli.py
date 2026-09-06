@@ -206,12 +206,69 @@ def cmd_remove_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_retranscribe(args: argparse.Namespace) -> int:
+    """Backfill word timestamps on existing samples (one-off per sample).
+
+    Samples added before word-level timestamps were stored only have plain
+    transcripts; fine-tuning then falls back to approximate cuts. This re-runs
+    Whisper over the stored WAVs and updates transcript/language/words in place.
+    Idempotent: already-timestamped samples are skipped unless --force.
+    """
+    from . import audio as A
+    from .config import get_settings
+    from .transcribe import transcribe_wav
+
+    try:
+        v = load_voice(args.voice)
+    except VoiceError as e:
+        console.print(f"[red]{e}[/red]")
+        return 1
+
+    targets = [s for s in v.samples if args.force or not s.words]
+    if not targets:
+        console.print("All samples already have word timestamps (use --force to redo).")
+        return 0
+
+    model_size = args.whisper_model or get_settings().whisper_model
+    sr = get_settings().sample_rate
+    ok = failed = 0
+    for s in targets:
+        wav_path = v.dir / s.file
+        if not wav_path.exists():
+            console.print(f"[red]✘[/red] {s.id}: file missing ({wav_path})")
+            failed += 1
+            continue
+        try:
+            t0 = time.time()
+            wav = A.load_audio(str(wav_path), sr)
+            t = transcribe_wav(wav, sr, language=s.language, model_size=model_size)
+            s.transcript = t.text
+            s.language = t.language or s.language
+            s.words = [[w, a, b] for w, a, b in t.words]
+            ok += 1
+            console.print(
+                f"[green]✔[/green] {s.id}: {len(s.words)} words "
+                f"({time.time() - t0:.0f}s, lang={s.language})"
+            )
+        except Exception as e:  # noqa: BLE001 — one bad sample shouldn't kill the batch
+            failed += 1
+            console.print(f"[red]✘[/red] {s.id}: {type(e).__name__}: {e}")
+
+    if ok:
+        from .voices import _save
+
+        _save(v)
+    console.print(f"\n{ok} sample(s) updated, {failed} failed. "
+                  f"Training data for '{v.name}' is now cut from real word timestamps.")
+    return 1 if failed and not ok else 0
+
+
 # --------------------------------------------------------------------------- #
 # synthesize
 # --------------------------------------------------------------------------- #
 
 def cmd_synthesize(args: argparse.Namespace) -> int:
-    from .engines import EngineError, get_spec
+    from .engines import EngineError, default_engine_name, get_spec
     from .synthesize import synthesize
 
     try:
@@ -221,7 +278,7 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        spec = get_spec(args.engine)
+        spec = get_spec(args.engine or default_engine_name())
     except EngineError as e:
         console.print(f"[red]{e}[/red]")
         return 2
@@ -289,12 +346,12 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 def cmd_train(args: argparse.Namespace) -> int:
-    from .engines import EngineError, get_spec
+    from .engines import EngineError, default_engine_name, get_spec
     from .train import record_finetune, run_finetune
     from .voices import load_voice
 
     try:
-        spec = get_spec(args.engine)
+        spec = get_spec(args.engine or default_engine_name())
     except EngineError as e:
         console.print(f"[red]{e}[/red]")
         return 2
@@ -478,6 +535,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("voice")
     sp.add_argument("sample_id")
     sp.set_defaults(func=cmd_remove_sample)
+
+    sp = sub.add_parser(
+        "retranscribe",
+        help="backfill word timestamps on existing samples (one-off; makes fine-tune cuts exactly aligned)",
+    )
+    sp.add_argument("voice")
+    sp.add_argument("--force", action="store_true", help="redo even samples that already have timestamps")
+    sp.add_argument(
+        "--whisper-model",
+        default=None,
+        choices=["tiny", "base", "small", "medium", "large-v2", "large-v3"],
+        help="faster-whisper transcription model (default: config 'medium')",
+    )
+    sp.set_defaults(func=cmd_retranscribe)
 
     sp = sub.add_parser("synthesize", help="generate speech with a cloned voice")
     sp.add_argument("text", nargs="?", help="text to speak (or pipe via stdin)")
