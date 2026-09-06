@@ -8,7 +8,7 @@ Endpoints (all JSON unless noted):
   DELETE /api/voices/{name}/samples/{id}
   GET  /api/voices/{name}/samples/{id}/audio   the sample's WAV (Range-supported, for in-browser playback)
   GET  /api/emotions                   preset emotion list
-  POST /api/synthesize                 {voice, text, emotion?, style?, language?, mode?} -> wav bytes + meta
+  POST /api/synthesize                 {voice, text, emotion?, style?, language?, mode?, format?} -> wav/mp3 bytes + meta
   POST /api/train                      {voice, epochs?, batch_size?, grad_accum_steps?, precision?, lr?, force?, dry_run?} -> job id (+advisory)
   GET  /api/train/{job_id}             job status (running/done/failed) + tail of log
   GET  /api/storage                    disk-usage breakdown + all fine-tune runs
@@ -60,6 +60,7 @@ class SynthesizeRequest(BaseModel):
     style: str | None = None
     language: str | None = "auto"
     mode: str = "auto"  # auto | zero-shot | finetuned
+    format: str = "wav"  # wav | mp3 — container of the returned audio bytes
     engine: str | None = None  # TTS engine (None = configured default)
     reference_sample: str | None = None  # sample id/filename; skips auto-pick by emotion
     # Optional generation overrides (None = model config default).
@@ -263,9 +264,22 @@ def create_app() -> FastAPI:
         except Exception as e:  # noqa: BLE001
             raise HTTPException(500, f"{type(e).__name__}: {e}") from e
 
+        fmt = (req.format or "wav").lower()
+        if fmt not in ("wav", "mp3"):
+            raise HTTPException(400, f"Unsupported format '{req.format}' (use wav or mp3).")
+        if fmt == "mp3":
+            from . import audio as A
+
+            payload = A.encode_mp3(outcome.result.wav, outcome.result.sample_rate)
+            media_type = "audio/mpeg"
+        else:
+            payload = _to_wav_bytes(outcome.result.wav, outcome.result.sample_rate)
+            media_type = "audio/wav"
+
         meta = {
             "engine": outcome.result.engine,
             "mode": outcome.result.mode,
+            "format": fmt,
             "requested_emotion": outcome.requested_emotion,
             "reference_mode": outcome.reference_source,  # auto | explicit
             "reference_emotion": outcome.resolved_emotion,
@@ -279,10 +293,9 @@ def create_app() -> FastAPI:
                 outcome.result.device
                 + (f" — {outcome.result.device_note}" if outcome.result.device_note else "")
             )
-        wav_bytes = _to_wav_bytes(outcome.result.wav, outcome.result.sample_rate)
         return Response(
-            content=wav_bytes,
-            media_type="audio/wav",
+            content=payload,
+            media_type=media_type,
             headers={"X-Synthesis-Meta": _json_header(meta)},
         )
 

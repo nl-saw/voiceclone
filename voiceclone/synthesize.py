@@ -30,6 +30,7 @@ def synthesize(
     language: str | None = None,
     engine_mode: str = "auto",  # auto | zero-shot | finetuned
     output_path: Path | None = None,
+    format: str = "wav",  # wav | mp3 — container for the default name; an explicit output_path decides by extension
     engine_name: str | None = None,  # registry name; None → configured default
     engine: Engine | None = None,  # explicit instance (tests); wins over engine_name
     reference_sample: str | None = None,  # sample id or filename; skips auto-selection
@@ -140,18 +141,25 @@ def synthesize(
     )
 
     # --- save ----------------------------------------------------------------
+    fmt = (format or "wav").lower()
+    if fmt not in ("wav", "mp3"):
+        raise ValueError(f"Unsupported output format '{format}' (use wav or mp3).")
     out: Path | None = None
     if output_path is not None:
+        # An explicit path wins — its extension decides the container.
+        ext = output_path.suffix.lower()
+        if ext not in A.OUTPUT_EXTS:
+            raise ValueError(f"Unsupported output format '{ext}' (use a .wav or .mp3 path).")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        A.save_wav(str(output_path), result.wav, result.sample_rate)
+        A.save_audio(str(output_path), result.wav, result.sample_rate)
         out = output_path
     else:
         default_dir = get_settings().output_dir
         default_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         safe_text = "".join(c if c.isalnum() or c in " -" else "" for c in text[:24]).strip()[:24] or "clip"
-        out = default_dir / f"{voice.name}_{stamp}_{safe_text}.wav"
-        A.save_wav(str(out), result.wav, result.sample_rate)
+        out = default_dir / f"{voice.name}_{stamp}_{safe_text}.{fmt}"
+        A.save_audio(str(out), result.wav, result.sample_rate)
 
     return SynthesisOutcome(
         result=result,

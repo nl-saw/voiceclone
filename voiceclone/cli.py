@@ -312,6 +312,7 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
             engine_name=spec.name,
             output_path=out_path,
             reference_sample=args.reference,
+            format=args.format,
             temperature=args.temp,
             length_penalty=args.length_penalty,
             repetition_penalty=args.repetition_penalty,
@@ -560,7 +561,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--lang", default="auto", help="force language ISO code (default: auto-detect from samples; engine validates)")
     sp.add_argument("--mode", choices=["auto", "zero-shot", "finetuned"], default="auto")
     sp.add_argument("--engine", default=None, help="TTS engine to use (default: configured default; see `voiceclone engines`)")
-    sp.add_argument("-o", "--output", default=None, help="output .wav path (default: data/output/...)")
+    sp.add_argument("-o", "--output", default=None, help="output path — .wav or .mp3 (the extension decides the format; default: data/output/...)")
+    sp.add_argument("--format", choices=["wav", "mp3"], default="wav",
+                    help="output container when -o is not given (default wav); with -o the file extension wins")
     # Generation tuning — all optional; when omitted the XTTS model's own defaults are used.
     sp.add_argument("--temp", type=float, default=None, help="sampling temperature (default 0.5; lower = more committed, fewer skipped words)")
     sp.add_argument("--length-penalty", type=float, default=None, help="length penalty (default 1.0; raise to ~1.2-1.5 to reduce dropped words)")

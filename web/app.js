@@ -293,6 +293,7 @@ $("#gen-btn").addEventListener("click", async () => {
         style: $("#style").value || null,
         language: $("#syn-lang").value,
         mode: $("#mode").value,
+        format: $("#syn-format").value,
         engine: $("#synth-engine").value || null,
         reference_sample: $("#ref-select").value || null,
         ...genParams(),
@@ -513,6 +514,7 @@ $("#ab-btn").addEventListener("click", async () => {
       body: JSON.stringify({
         voice: activeVoice, text, emotion: selectedEmotion,
         style: $("#style").value || null, language: $("#syn-lang").value, mode,
+        format: $("#syn-format").value,
         engine: $("#synth-engine").value || null,
         reference_sample: $("#ref-select").value || null, ...genParams(),
       }),

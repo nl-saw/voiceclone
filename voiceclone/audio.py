@@ -1,15 +1,19 @@
 """Audio I/O helpers.
 
 Decode arbitrary input formats (mp3, wav, flac, m4a, ogg, opus, webm) to
-24 kHz mono float32 PCM using PyAV — no system ffmpeg required.
+24 kHz mono float32 PCM using PyAV — no system ffmpeg required. Output is
+saved as WAV (soundfile) or MP3 (PyAV's libmp3lame encoder).
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 
 SUPPORTED_EXTS = (".wav", ".mp3", ".flac", ".m4a", ".ogg", ".opus", ".webm")
+OUTPUT_EXTS = (".wav", ".mp3")
 
 
 def is_supported_audio(path: str) -> bool:
@@ -59,6 +63,43 @@ def load_audio(path: str, target_sr: int = 24000) -> np.ndarray:
 def save_wav(path: str, wav: np.ndarray, sr: int = 24000) -> None:
     """Save float32 mono PCM as a 16-bit PCM WAV file."""
     sf.write(str(path), wav.astype(np.float32), sr, subtype="PCM_16")
+
+
+def encode_mp3(wav: np.ndarray, sr: int = 24000, bitrate: str = "192k") -> bytes:
+    """Encode float32 mono PCM to MP3 (libmp3lame via PyAV — no system ffmpeg).
+
+    192 kbps CBR is transparent for speech and keeps files small (~1.4 MB/min).
+    """
+    import io
+
+    import av
+
+    pcm = np.clip(wav * 32767.0, -32768, 32767).astype(np.int16)
+    buf = io.BytesIO()
+    container = av.open(buf, "w", format="mp3")
+    try:
+        stream = container.add_stream("libmp3lame", rate=sr, options={"b": bitrate})
+        frame = av.AudioFrame.from_ndarray(pcm.reshape(1, -1), format="s16", layout="mono")
+        frame.sample_rate = sr
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode(None):  # flush the encoder
+            container.mux(packet)
+    finally:
+        container.close()
+    return buf.getvalue()
+
+
+def save_audio(path: str, wav: np.ndarray, sr: int = 24000) -> None:
+    """Save float32 mono PCM as WAV or MP3 — the file extension decides."""
+    ext = Path(path).suffix.lower()
+    if ext == ".wav":
+        save_wav(path, wav, sr)
+    elif ext == ".mp3":
+        with open(path, "wb") as f:
+            f.write(encode_mp3(wav, sr))
+    else:
+        raise ValueError(f"Unsupported output format '{ext or path}' (use .wav or .mp3).")
 
 
 def resample(wav: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:

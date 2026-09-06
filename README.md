@@ -13,7 +13,7 @@ zero-shot + fine-tune recipe) and **Chatterbox Multilingual V3** (MIT,
 ```
 ┌─────────────┐   samples    ┌──────────────────┐   text + emotion   ┌────────────┐
 │ .wav/.mp3   │─────────────▶│ voice profile    │───────────────────▶│  speech    │
-│ (any length)│              │ + transcripts    │   TTS engine       │  .wav out  │
+│ (any length)│              │ + transcripts    │   TTS engine       │ .wav / .mp3│
 └─────────────┘              │ + emotion tags   │   (+ fine-tuned    └────────────┘
                              │                  │     checkpoints)
                              └──────────────────┘
@@ -91,6 +91,7 @@ uv run voiceclone synthesize "Hello, this is a cloned voice!" --voice alice
 uv run voiceclone synthesize "Ik ben blij om je te zien." --voice alice --lang nl
 uv run voiceclone synthesize "Goodbye." --voice alice --emotion sad
 uv run voiceclone synthesize "Shh…" --voice alice --style "whisper, very quiet"
+uv run voiceclone synthesize "Hello!" --voice alice -o hello.mp3   # MP3 output (or --format mp3)
 
 # 5) optional: install another engine (dedicated venv + weights) and use it
 uv run voiceclone engines                      # what's available / installed
