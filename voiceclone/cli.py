@@ -472,6 +472,7 @@ def cmd_install_engine(args: argparse.Namespace) -> int:
         console.print(f"[red]Install failed:[/red] {e}")
         return 1
     console.print(f"[green]✔[/green] Engine '{spec.name}' installed in {time.time() - t0:.0f}s")
+    _clean_package_caches()  # the torch-wheel scratch from this install is ~5-10 GB
     return 0
 
 
@@ -582,6 +583,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "existing repo/venv are reused)")
     sp.set_defaults(func=cmd_install_engine)
 
+    sp = sub.add_parser(
+        "clean-cache",
+        help="wipe the project-pinned uv/pip download caches (safe: venvs keep hardlinks)",
+    )
+    sp.set_defaults(func=cmd_clean_cache)
+
     sp = sub.add_parser("train", help="fine-tune a per-voice model (engine-specific)")
     sp.add_argument("voice")
     sp.add_argument("--engine", default=None, help="TTS engine to fine-tune (default: configured default; see `voiceclone engines`)")
@@ -627,6 +634,44 @@ def _pin_caches_to_project() -> None:
         from .engines.external import _hardlinks_supported
         if not _hardlinks_supported(s.data_dir):
             os.environ["UV_LINK_MODE"] = "copy"
+
+
+def _clean_package_caches() -> None:
+    """Wipe the project-pinned uv/pip download caches (post-install housekeeping).
+
+    Installed venvs keep hardlinks to every file they need, so right after an
+    engine install these caches are pure scratch — and a torch stack is 5–10 GB
+    of it. Only caches we pinned ourselves (inside ``data/``) are touched; a
+    user-set ``UV_CACHE_DIR``/``PIP_CACHE_DIR`` pointing elsewhere is left alone.
+    """
+    import shutil
+
+    s = get_settings()
+    freed = 0
+    for sub in ("uv", "pip"):
+        d = s.cache_dir / sub
+        if not d.exists():
+            continue
+        try:
+            if not d.resolve().is_relative_to(s.data_dir.resolve()):
+                continue  # user-set external cache — leave it alone
+        except OSError:
+            continue
+        before = shutil.disk_usage(s.data_dir).free
+        try:
+            shutil.rmtree(d)
+            freed += max(0, shutil.disk_usage(s.data_dir).free - before)
+        except OSError as e:
+            console.print(f"[yellow]Could not fully clean {d}: {e}[/yellow]")
+    if freed:
+        size = f"{freed / 2**30:.1f} GB" if freed >= 2**30 else f"{freed / 2**20:.0f} MB"
+        console.print(f"  Cleaned package cache (freed {size})")
+
+
+def cmd_clean_cache(args: argparse.Namespace) -> int:
+    _clean_package_caches()
+    console.print("[green]✔[/green] Package caches cleaned (venvs are unaffected — they keep hardlinks).")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

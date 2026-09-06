@@ -69,7 +69,9 @@ clones its repo). `uv sync` creates the Python 3.11 venv itself — no system
 Python setup needed. Tested on Linux x86_64 (CosyVoice 3's install/train path is
 Linux-only in practice: deepspeed builds from source and training uses torchrun).
 Disk: ~10–12 GB for the base toolkit + XTTS weights + Whisper model, plus
-~7–13 GB per extra engine (CosyVoice 3) / ~4–6 GB (Chatterbox).
+~7–13 GB per extra engine (CosyVoice 3) / ~4–6 GB (Chatterbox). The package
+download cache is wiped automatically after each engine install; run
+`voiceclone clean-cache` any time to reclaim it manually.
 
 ```bash
 # 1) install (Python 3.11 venv is created automatically by uv)
