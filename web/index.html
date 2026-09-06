@@ -121,7 +121,9 @@
       <label>Lr (lower = safer) <input type="number" id="lr" value="4e-6" step="any" min="0" placeholder="4e-6"></label>
     </div>
     <div class="row">
+      <label>Batch size <input type="number" id="batch-size" value="1" min="1" step="1"></label>
       <label>Grad accum <input type="number" id="grad-accum" value="4" min="1"></label>
+      <span class="hint">effective batch = size × accum</span>
       <label>Precision
         <select id="precision"><option value="auto">auto (bf16 on GPU)</option><option value="bf16">bf16</option><option value="fp32">fp32</option></select>
       </label>

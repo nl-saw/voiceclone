@@ -335,6 +335,7 @@ $("#train-btn").addEventListener("click", async () => {
     voice: activeVoice,
     engine,
     epochs,
+    batch_size: parseInt($("#batch-size").value || "1", 10),
     grad_accum_steps: parseInt($("#grad-accum").value || "4", 10),
     precision: $("#precision").value,
     force: $("#force").checked,
