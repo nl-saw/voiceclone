@@ -233,6 +233,33 @@ def _tee_stdout(log):
         sys.stdout = orig
 
 
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def _route_trainer_logs_to_stdout() -> None:
+    """Point the coqui ``trainer`` logger's console handler at our stdout.
+
+    The trainer emits ALL per-step/epoch progress (losses, EVAL PERFORMANCE
+    with per-epoch deltas, BEST MODEL saves) through stdlib logging to stderr —
+    invisible in our train log and the web UI, which only see stdout. Rewire its
+    stream handler to stdout (which ``_tee_stdout`` mirrors into the log file),
+    stripping the hardcoded ANSI color codes that would otherwise pollute it.
+    """
+    import logging
+
+    class _PlainStdout:
+        def write(self, s):
+            sys.stdout.write(_ANSI_RE.sub("", s))
+            return len(s)
+
+        def flush(self):
+            sys.stdout.flush()
+
+    for h in logging.getLogger("trainer").handlers:
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            h.stream = _PlainStdout()
+
+
 def _available_ram_gib() -> float | None:
     try:
         info = Path("/proc/meminfo").read_text().splitlines()
@@ -479,6 +506,8 @@ def _run_finetune_xtts(
         )
         from trainer import Trainer, TrainerArgs
 
+        _route_trainer_logs_to_stdout()  # per-step/epoch progress → our log + web UI
+
         out_path = settings.models_dir / f"{voice.name}_ft"
         run_training = out_path / "run" / "training"
         os.makedirs(run_training, exist_ok=True)
@@ -601,26 +630,42 @@ def _run_finetune_xtts(
             raise RuntimeError(f"Trainer finished but no checkpoint found under {run_training}")
         report.checkpoint = str(ckpt)
 
+        # ---- summary ---------------------------------------------------------
+        best = getattr(trainer, "best_loss", None) or {}
+        eval_loss = best.get("eval_loss")
+        logline(
+            f"Training complete: {trainer.epochs_done}/{config.epochs} epochs, "
+            f"{trainer.total_steps_done} steps"
+        )
+        if isinstance(eval_loss, float) and eval_loss != float("inf"):
+            logline(f"Best model: {ckpt.name} (eval loss {eval_loss:.4f})")
+
         # ---- post-training cleanup ------------------------------------------
-        # The trainer leaves ~5 GiB of redundancy in the run dir: best_model.pth
-        # is an exact copy of the newest best_model_<step>.pth (its "shortcut"),
-        # and checkpoint_*.pth are periodic snapshots superseded by the final
-        # model. Only best models (selectable in the web UI) and the registered
-        # checkpoint are ever used again — drop everything else right away.
+        # The trainer writes into a per-run subdir (FT_<voice>-<date>-<hash>/)
+        # and leaves ~5 GiB of redundancy in each: best_model.pth is an exact
+        # copy of the newest best_model_<step>.pth (its "shortcut"), and
+        # checkpoint_*.pth are periodic snapshots superseded by the final model.
+        # Only best models (selectable in the web UI) and the registered
+        # checkpoint are ever used again — drop everything else, in this run's
+        # dir AND older ones left behind by previous retrains of this voice.
+        dirs = {ckpt.parent}
+        if run_training.is_dir():
+            dirs.update(d for d in run_training.iterdir() if d.is_dir())
         freed = 0
-        for f in sorted(run_training.glob("*.pth")):
-            if f.resolve() == ckpt.resolve():
-                continue
-            if re.match(r"best_model_\d+\.pth$", f.name):
-                continue  # other best models stay selectable in the web UI
-            try:
-                freed += f.stat().st_size
-                f.unlink()
-            except OSError:
-                pass
+        for d in sorted(dirs):
+            for f in sorted(d.glob("*.pth")):
+                if f.resolve() == ckpt.resolve():
+                    continue
+                if re.match(r"best_model_\d+\.pth$", f.name):
+                    continue  # best models stay selectable in the web UI
+                try:
+                    freed += f.stat().st_size
+                    f.unlink()
+                except OSError:
+                    pass
         if freed:
             logline(f"Removed {freed / 2**30:.1f} GiB of superseded checkpoints (kept {ckpt.name})")
-        logline(f"Done. Checkpoint: {ckpt}")
+        logline(f"Done. Checkpoint registered for synthesis: {ckpt}")
         return report
 
     except BaseException as e:  # noqa: BLE001 — surface any failure in the report (incl. SystemExit from trainer.fit)

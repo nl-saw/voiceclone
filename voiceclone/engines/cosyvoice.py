@@ -84,8 +84,11 @@ def _run_streaming(cmd: list[str], logline, cwd: str | None = None, env: dict | 
         tail.append(line)
         if len(tail) > 40:
             tail.pop(0)
-        # keep the console uncluttered: only show progress-ish lines
-        if any(k in line for k in ("Collecting", "Installing", "Downloading", "error", "Error", "ERROR")):
+        # keep the console uncluttered: only show progress-ish lines. The CV3
+        # patterns surface training progress (per-batch loss every log_interval,
+        # "CV info" per epoch save) — without them a 20-min train looks frozen.
+        if any(k in line for k in ("Collecting", "Installing", "Downloading", "error", "Error", "ERROR")) \
+                or "CV info" in line or re.search(r"\bBatch \d+/\d+", line):
             logline(line[:200])
     code = proc.wait()
     if code != 0:
