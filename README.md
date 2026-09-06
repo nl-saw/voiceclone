@@ -63,6 +63,14 @@ be fine-tuned with several engines side by side.
 
 ## Quickstart
 
+Prerequisites: **uv** ([install](https://docs.astral.sh/uv/getting-started/installation/))
+and **git** (the base env installs Coqui TTS from git; the CosyVoice 3 installer
+clones its repo). `uv sync` creates the Python 3.11 venv itself — no system
+Python setup needed. Tested on Linux x86_64 (CosyVoice 3's install/train path is
+Linux-only in practice: deepspeed builds from source and training uses torchrun).
+Disk: ~10–12 GB for the base toolkit + XTTS weights + Whisper model, plus
+~7–13 GB per extra engine (CosyVoice 3) / ~4–6 GB (Chatterbox).
+
 ```bash
 # 1) install (Python 3.11 venv is created automatically by uv)
 cd voiceclone
@@ -118,6 +126,11 @@ To force the full install again (re-apply pins/patches,
 reinstall the pinned package into the existing venv): 
 `uv run voiceclone install-engine <name> --force`.
 
+CosyVoice 3's installer additionally needs a C++ compiler (`g++`, e.g.
+`build-essential`) — deepspeed builds from source. No system FFmpeg is needed
+anywhere: audio I/O goes through PyAV/soundfile (the repo's torchaudio call
+sites are patched during install).
+
 ## How sentiment works
 
 XTTS v2 has no explicit "emotion" parameter — emotional tone is largely carried
@@ -152,9 +165,8 @@ intensity dial — `neutral`≈0.5, `calm`≈0.35, `happy/excited/angry`≈0.7�
   get one dataset per language. Samples added before timestamps were stored fall
   back to approximate word-count cuts — run `voiceclone retranscribe <voice>`
   (one-off per sample, ~10× realtime on CPU) to backfill them for exactly-aligned clips.
-  Transcription runs on the GPU automatically when ctranslate2 was built with CUDA
-  support (the PyPI wheels are CPU-only; a one-time source build against a CUDA
-  toolkit enables it — see `get_whisper` in `transcribe.py`); otherwise CPU int8.
+  Transcription auto-uses the GPU when ctranslate2 was built with CUDA support
+  (see [Using a GPU](#using-a-gpu)); otherwise CPU int8.
 - **`--engine cosyvoice3`** runs FunAudioLLM's official CosyVoice 3 recipe
   headlessly: Kaldi-style data → parquet → `torchrun train.py` on the LLM
   component (where speaker identity lives) → averaged best checkpoint → an
@@ -214,8 +226,22 @@ data/
 
 ## Using a GPU
 
-The 5090 (Blackwell) needs a recent driver (≥ ~580, CUDA 13 capable).
-Training auto-enables bfloat16 mixed precision when the GPU is visible.
+Any recent NVIDIA GPU works; the 5090 (Blackwell) needs a recent driver
+(≥ ~580, CUDA 13 capable). Training auto-enables bfloat16 mixed precision when
+the GPU is visible.
+
+**Faster transcription (optional):** faster-whisper runs on CPU int8 by default
+because PyPI's ctranslate2 wheels are CPU-only. To run `add-sample` /
+`retranscribe` on the GPU, build ctranslate2 from source once: install a CUDA
+toolkit (nvcc + cuBLAS, any 12.x) plus `build-essential cmake ninja-build`, then
+
+```bash
+uv pip install --reinstall --no-binary ctranslate2 ctranslate2==4.8.1
+```
+
+Transcription auto-detects the GPU afterwards (float16 — ctranslate2 disables
+INT8 on Blackwell). A later `uv sync` reverts to the CPU wheel; transcription
+just slows down, and rerunning the command above restores the GPU.
 
 ## License & legal notes
 
