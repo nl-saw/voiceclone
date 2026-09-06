@@ -78,17 +78,20 @@ async function loadSamples(name) {
   const d = await (await api(`/api/voices/${encodeURIComponent(name)}`)).json();
   activeVoiceSeconds = d.total_seconds || 0;
   updateDataWarning();
+  stopPlayer(); // rows are rebuilt — drop any in-flight playback
   const tbody = $("#samples-table tbody");
   tbody.innerHTML = "";
   for (const s of d.samples) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${esc(s.id)}</td>
+      <td class="sample-cell">${esc(s.id)} <button class="play" data-play="${s.id}" title="Play clip">▶</button>
+        <input type="range" class="seek" min="0" max="1000" value="0" step="1" aria-label="Seek ${s.id}"></td>
       <td><select data-sid="${s.id}">${EMOTIONS.map(e => `<option ${e === s.emotion ? "selected" : ""}>${e}</option>`).join("")}</select></td>
       <td>${esc(s.language)}</td>
       <td>${s.duration_s.toFixed(1)}s</td>
       <td class="transcript" title="${esc(s.transcript)}">${esc(s.transcript || "(no transcript)")}</td>
       <td><button class="del" data-del="${s.id}" title="delete sample">✕</button></td>`;
+    wireSamplePlayer(tr, s);
     tbody.appendChild(tr);
   }
   if (!d.samples.length) {
@@ -107,6 +110,48 @@ async function loadSamples(name) {
     }
     if ([...refSel.options].some(o => o.value === prev)) refSel.value = prev;
   }
+}
+
+// ---- sample playback: one shared <audio>; the server sends Range, so seeking works ----
+const player = { audio: new Audio(), sid: null, btn: null, seek: null };
+
+function stopPlayer() {
+  if (player.btn) player.btn.textContent = "▶";
+  if (player.seek) player.seek.value = 0;
+  player.audio.pause();
+  player.audio.removeAttribute("src");
+  player.audio.load();
+  player.sid = null; player.btn = null; player.seek = null;
+}
+
+player.audio.addEventListener("ended", stopPlayer);
+player.audio.addEventListener("timeupdate", () => {
+  const d = player.audio.duration;
+  if (!player.seek || !isFinite(d) || !d) return;
+  player.seek.value = Math.round((player.audio.currentTime / d) * 1000);
+});
+
+function wireSamplePlayer(tr, s) {
+  const btn = tr.querySelector(".play");
+  const seek = tr.querySelector(".seek");
+  btn.onclick = () => {
+    const audio = player.audio;
+    if (player.sid === s.id) { // toggle pause/resume on the row already playing
+      if (audio.paused) { audio.play().catch(() => {}); } else { audio.pause(); btn.textContent = "▶"; }
+      return;
+    }
+    stopPlayer();
+    player.sid = s.id; player.btn = btn; player.seek = seek;
+    audio.src = `/api/voices/${encodeURIComponent(activeVoice)}/samples/${encodeURIComponent(s.id)}/audio`;
+    audio.play()
+      .then(() => { btn.textContent = "⏸"; })
+      .catch(() => { btn.textContent = "▶"; });
+  };
+  seek.oninput = () => {
+    const d = player.audio.duration;
+    if (player.sid !== s.id || !isFinite(d) || !d) return;
+    player.audio.currentTime = (Number(seek.value) / 1000) * d;
+  };
 }
 
 $("#samples-table").addEventListener("change", async (e) => {

@@ -130,6 +130,10 @@ table.samples th { text-align: left; color: var(--muted); font-weight: 500; padd
 table.samples td { padding: .35rem .4rem; border-bottom: 1px solid rgba(42,51,64,.5); vertical-align: middle; }
 table.samples select { padding: .2rem .35rem; font-size: .82rem; }
 table.samples .transcript { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+table.samples .sample-cell { white-space: nowrap; min-width: 130px; }
+.play { background: none; border: none; color: var(--muted); cursor: pointer; font-size: .78rem; padding: 0 .2rem 0 0; vertical-align: middle; }
+.play:hover { color: var(--accent); }
+table.samples .seek { display: block; width: 110px; margin: .3rem 0 0; accent-color: var(--accent); cursor: pointer; }
 .del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: .95rem; }
 .del:hover { color: var(--err); }
 

@@ -6,6 +6,7 @@ Endpoints (all JSON unless noted):
   POST /api/voices/{name}/samples      multipart upload of .wav/.mp3 files (+ optional lang/emotion per batch)
   PATCH /api/voices/{name}/samples/{id}   {emotion?, note?}
   DELETE /api/voices/{name}/samples/{id}
+  GET  /api/voices/{name}/samples/{id}/audio   the sample's WAV (Range-supported, for in-browser playback)
   GET  /api/emotions                   preset emotion list
   POST /api/synthesize                 {voice, text, emotion?, style?, language?, mode?} -> wav bytes + meta
   POST /api/train                      {voice, epochs?, batch_size?, grad_accum_steps?, precision?, lr?, force?, dry_run?} -> job id (+advisory)
@@ -213,6 +214,21 @@ def create_app() -> FastAPI:
         except VoiceError as e:
             raise HTTPException(400, str(e)) from e
         return {"voice": v.name, "samples_total": len(v.samples)}
+
+    @app.get("/api/voices/{name}/samples/{sid}/audio")
+    def sample_audio(name: str, sid: str) -> Response:
+        try:
+            v = load_voice(name)
+        except VoiceError as e:
+            raise HTTPException(404, str(e)) from e
+        s = next((x for x in v.samples if x.id == sid), None)
+        if s is None:
+            raise HTTPException(404, f"Sample '{sid}' not found in voice '{name}'.")
+        p = v.dir / s.file
+        if not p.is_file():
+            raise HTTPException(404, "Audio file missing on disk.")
+        # FileResponse honours Range headers → the browser can seek without re-downloading.
+        return FileResponse(p, media_type="audio/wav", filename=p.name)
 
     # ------------------------------------------------------------------ #
     @app.post("/api/synthesize")
