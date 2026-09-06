@@ -233,23 +233,24 @@ def _tee_stdout(log):
         sys.stdout = orig
 
 
-_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
-
-
 def _route_trainer_logs_to_stdout() -> None:
     """Point the coqui ``trainer`` logger's console handler at our stdout.
 
     The trainer emits ALL per-step/epoch progress (losses, EVAL PERFORMANCE
     with per-epoch deltas, BEST MODEL saves) through stdlib logging to stderr —
     invisible in our train log and the web UI, which only see stdout. Rewire its
-    stream handler to stdout (which ``_tee_stdout`` mirrors into the log file),
-    stripping the hardcoded ANSI color codes that would otherwise pollute it.
+    stream handler to a proxy that resolves sys.stdout at write time: while
+    ``_tee_stdout`` is active (it is swapped in around Trainer construction and
+    fit()), writes land in the terminal AND the log file; afterwards they just
+    go to the terminal. ANSI color codes are kept — the console shows green/red
+    deltas, and the log file renders them too when cat'ed. The web UI strips
+    them before display (web/app.js).
     """
     import logging
 
-    class _PlainStdout:
+    class _StdoutProxy:
         def write(self, s):
-            sys.stdout.write(_ANSI_RE.sub("", s))
+            sys.stdout.write(s)
             return len(s)
 
         def flush(self):
@@ -257,7 +258,7 @@ def _route_trainer_logs_to_stdout() -> None:
 
     for h in logging.getLogger("trainer").handlers:
         if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-            h.stream = _PlainStdout()
+            h.stream = _StdoutProxy()
 
 
 def _available_ram_gib() -> float | None:
@@ -633,8 +634,10 @@ def _run_finetune_xtts(
         # ---- summary ---------------------------------------------------------
         best = getattr(trainer, "best_loss", None) or {}
         eval_loss = best.get("eval_loss")
+        # epochs_done is the last (0-based) epoch index — a full run of N
+        # epochs leaves it at N-1.
         logline(
-            f"Training complete: {trainer.epochs_done}/{config.epochs} epochs, "
+            f"Training complete: {trainer.epochs_done + 1}/{config.epochs} epochs, "
             f"{trainer.total_steps_done} steps"
         )
         if isinstance(eval_loss, float) and eval_loss != float("inf"):

@@ -318,7 +318,8 @@ function pollTrain(jobId) {
   trainPoll = setInterval(async () => {
     try {
       const d = await (await api(`/api/train/${jobId}`)).json();
-      const tail = (d.log_tail || []).slice(-3).join("\n");
+      // log lines may carry ANSI colors (kept for terminal/log file) — strip here
+      const tail = (d.log_tail || []).slice(-3).map(s => s.replace(/\u001b\[[0-9;]*m/g, "")).join("\n");
       setStatus($("#train-status"), `status: ${d.status}${d.error ? "\n" + d.error : ""}${tail ? "\n" + tail : ""}`, d.status === "failed" ? "err" : d.status === "done" ? "ok" : "warn");
       if (d.status !== "running") {
         clearInterval(trainPoll);
